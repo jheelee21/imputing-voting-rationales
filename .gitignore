@@ -5,3 +5,4 @@ __pycache__/
 */__pycache__/
 .ruff_cache__
 .DS_Store
+*/.DS_Store
