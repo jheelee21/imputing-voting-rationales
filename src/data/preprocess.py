@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from typing import Dict, List, Tuple
 
-from utils.types import (
+from src.utils.types import (
     CORE_RATIONALES,
     REQUIRED_FEATURES,
     GENERAL_FEATURES,

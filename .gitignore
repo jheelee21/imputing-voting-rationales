@@ -1,2 +1,6 @@
 data/*
 docs/private/*
+.venv
+__pycache__/
+*/__pycache__/
+.ruff_cache__

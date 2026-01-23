@@ -2,11 +2,9 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.multioutput import MultiOutputClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from typing import Dict, List, Tuple, Optional
 import pickle
-from utils.types import CORE_RATIONALES, ALL_RATIONALES
 
 
 class SupervisedModel:  # to be used per rationale
@@ -36,7 +34,7 @@ class SupervisedModel:  # to be used per rationale
                     {
                         "max_iter": 1000,
                         "class_weight": "balanced",
-                        "penalty": "l2",
+                        "l1_ratio": 0,  # L2 regularization
                         "C": 1.0,
                     }
                 )
@@ -77,7 +75,7 @@ class SupervisedModel:  # to be used per rationale
             return
 
         if isinstance(self.model, CalibratedClassifierCV):
-            base_model = self.model.calibrated_classifiers_[0].base_estimator
+            base_model = self.model.calibrated_classifiers_[0].estimator
         else:
             base_model = self.model
 
@@ -150,7 +148,7 @@ class SupervisedModel:  # to be used per rationale
         return df
 
     def save_model(self):
-        filepath = f"../models/supervised_{self.rationale}.pkl"
+        filepath = f"src/models/supervised_{self.rationale}.pkl"
         with open(filepath, "wb") as f:
             pickle.dump(self, f)
         print(f"Model for rationale '{self.rationale}' saved to {filepath}")

@@ -4,18 +4,16 @@ from pathlib import Path
 from typing import Tuple, List, Optional
 from sklearn.model_selection import train_test_split
 
-from utils.types import CORE_RATIONALES, ALL_RATIONALES, StratifyOption
+from src.utils.types import CORE_RATIONALES, ALL_RATIONALES, StratifyOption
 
 
 class DataLoader:
-    def __init__(self, data_dir: str):
-        self.data_dir = Path(data_dir)
+    def __init__(self):
         self.df = None
 
     def load_data(
-        self, file_name: str = "../data/Imputing Rationales.csv"
+        self, filepath: str = "./data/Imputing Rationales.csv"
     ) -> pd.DataFrame:
-        filepath = self.data_path / file_name
         self.df = pd.read_csv(filepath)
         print(f"Loaded {len(self.df)} records from {filepath}")
         return self.df

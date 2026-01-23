@@ -1,4 +1,4 @@
-from typing import Enum
+from enum import Enum
 
 CORE_RATIONALES = ["diversity", "indep", "tenure", "busyness", "combined_ceo_chairman"]
 ALL_RATIONALES = [
