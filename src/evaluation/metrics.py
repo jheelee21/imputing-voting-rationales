@@ -13,6 +13,8 @@ from sklearn.metrics import (
 )
 from typing import Dict, List, Tuple
 from src.utils.types import ALL_RATIONALES, CORE_RATIONALES
+import matplotlib.pyplot as plt
+from sklearn.calibration import calibration_curve
 
 
 class EvaluationMetrics:
@@ -211,3 +213,178 @@ class EvaluationMetrics:
         plt.plot([0, 1], [0, 1], "k--")
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
+
+
+def evaluate_probabilistic_predictions(
+    y_true: pd.DataFrame, y_prob: pd.DataFrame, rationales: List[str]
+) -> pd.DataFrame:
+    results = []
+
+    for rationale in rationales:
+        # Filter valid samples
+        mask = y_true[rationale].notna()
+        if mask.sum() == 0:
+            continue
+
+        y_t = y_true[rationale][mask].values
+        y_p = y_prob[rationale][mask].values
+
+        # Skip if only one class
+        if len(np.unique(y_t)) < 2:
+            continue
+
+        results.append(
+            {
+                "rationale": rationale,
+                "log_loss": log_loss(y_t, y_p),
+                "roc_auc": roc_auc_score(y_t, y_p),
+                "avg_precision": average_precision_score(y_t, y_p),
+                "n_samples": int(mask.sum()),
+                "positive_rate": float(y_t.mean()),
+            }
+        )
+
+    return pd.DataFrame(results)
+
+
+def plot_calibration_curves(
+    y_true: pd.DataFrame,
+    y_prob: pd.DataFrame,
+    rationales: List[str],
+    n_bins: int = 10,
+    figsize: tuple = (15, 10),
+):
+    n_rationales = len(rationales)
+    n_cols = 3
+    n_rows = (n_rationales + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    axes = axes.flatten() if n_rationales > 1 else [axes]
+
+    for i, rationale in enumerate(rationales):
+        ax = axes[i]
+
+        # Filter valid samples
+        mask = y_true[rationale].notna()
+        if mask.sum() == 0 or len(np.unique(y_true[rationale][mask])) < 2:
+            ax.text(
+                0.5, 0.5, f"Insufficient data\n{rationale}", ha="center", va="center"
+            )
+            continue
+
+        y_t = y_true[rationale][mask].values
+        y_p = y_prob[rationale][mask].values
+
+        # Calculate calibration
+        fraction_of_positives, mean_predicted_value = calibration_curve(
+            y_t, y_p, n_bins=n_bins
+        )
+
+        # Plot
+        ax.plot([0, 1], [0, 1], "k--", label="Perfect Calibration", alpha=0.5)
+        ax.plot(
+            mean_predicted_value,
+            fraction_of_positives,
+            "o-",
+            label=rationale,
+            linewidth=2,
+            markersize=6,
+        )
+
+        # Calculate calibration error
+        cal_error = np.abs(fraction_of_positives - mean_predicted_value).mean()
+
+        ax.set_xlabel("Predicted Probability", fontsize=10)
+        ax.set_ylabel("True Probability", fontsize=10)
+        ax.set_title(f"{rationale}\n(Cal. Error: {cal_error:.3f})", fontsize=11)
+        ax.legend(fontsize=9)
+        ax.grid(alpha=0.3)
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
+
+    # Remove extra subplots
+    for i in range(n_rationales, len(axes)):
+        fig.delaxes(axes[i])
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_probability_distributions(
+    y_prob: pd.DataFrame,
+    rationales: List[str],
+    y_true: pd.DataFrame = None,
+    figsize: tuple = (15, 10),
+):
+    n_rationales = len(rationales)
+    n_cols = 3
+    n_rows = (n_rationales + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+    axes = axes.flatten() if n_rationales > 1 else [axes]
+
+    for i, rationale in enumerate(rationales):
+        ax = axes[i]
+
+        if y_true is not None:
+            mask = y_true[rationale].notna()
+            if mask.sum() > 0:
+                y_t = y_true[rationale][mask].values
+                y_p = y_prob[rationale][mask].values
+
+                ax.hist(
+                    y_p[y_t == 0],
+                    bins=30,
+                    alpha=0.5,
+                    label="Negative",
+                    density=True,
+                    color="blue",
+                )
+                ax.hist(
+                    y_p[y_t == 1],
+                    bins=30,
+                    alpha=0.5,
+                    label="Positive",
+                    density=True,
+                    color="red",
+                )
+                ax.legend()
+        else:
+            ax.hist(y_prob[rationale], bins=30, alpha=0.7, density=True, color="green")
+
+        ax.set_xlabel("Predicted Probability", fontsize=10)
+        ax.set_ylabel("Density", fontsize=10)
+        ax.set_title(rationale, fontsize=11)
+        ax.grid(alpha=0.3)
+
+    for i in range(n_rationales, len(axes)):
+        fig.delaxes(axes[i])
+
+    plt.tight_layout()
+    return fig
+
+
+def analyze_prediction_confidence(
+    y_prob: pd.DataFrame,
+    rationales: List[str],
+    thresholds: List[float] = [0.5, 0.7, 0.9],
+) -> pd.DataFrame:
+    results = []
+
+    for rationale in rationales:
+        row = {"rationale": rationale}
+
+        for threshold in thresholds:
+            high_conf = (y_prob[rationale] >= threshold).sum()
+            pct = high_conf / len(y_prob) * 100
+            row[f"prob_>_{threshold}"] = f"{high_conf} ({pct:.1f}%)"
+
+        quantiles = y_prob[rationale].quantile([0.25, 0.50, 0.75, 0.90])
+        row["25th_percentile"] = f"{quantiles[0.25]:.3f}"
+        row["median"] = f"{quantiles[0.50]:.3f}"
+        row["75th_percentile"] = f"{quantiles[0.75]:.3f}"
+        row["90th_percentile"] = f"{quantiles[0.90]:.3f}"
+
+        results.append(row)
+
+    return pd.DataFrame(results)
