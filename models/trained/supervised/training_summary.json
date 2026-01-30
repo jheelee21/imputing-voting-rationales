@@ -1,0 +1,57 @@
+{
+  "diversity": {
+    "rationale": "diversity",
+    "model_type": "logistic",
+    "calibrate": true,
+    "n_train": 130173,
+    "n_positive": 40467,
+    "positive_rate": 0.3108709179322901,
+    "n_features": 9,
+    "train_accuracy": 0.7307122060642376,
+    "timestamp": "2026-01-30T01:36:02.161700"
+  },
+  "indep": {
+    "rationale": "indep",
+    "model_type": "logistic",
+    "calibrate": true,
+    "n_train": 130173,
+    "n_positive": 48411,
+    "positive_rate": 0.3718973980779424,
+    "n_features": 9,
+    "train_accuracy": 0.6580089573106558,
+    "timestamp": "2026-01-30T01:36:03.480041"
+  },
+  "tenure": {
+    "rationale": "tenure",
+    "model_type": "logistic",
+    "calibrate": true,
+    "n_train": 130173,
+    "n_positive": 26972,
+    "positive_rate": 0.20720118611386384,
+    "n_features": 9,
+    "train_accuracy": 0.7853164634755287,
+    "timestamp": "2026-01-30T01:36:05.334905"
+  },
+  "busyness": {
+    "rationale": "busyness",
+    "model_type": "logistic",
+    "calibrate": true,
+    "n_train": 130173,
+    "n_positive": 25115,
+    "positive_rate": 0.1929355549922027,
+    "n_features": 7,
+    "train_accuracy": 0.8070644450077973,
+    "timestamp": "2026-01-30T01:36:06.058550"
+  },
+  "combined_ceo_chairman": {
+    "rationale": "combined_ceo_chairman",
+    "model_type": "logistic",
+    "calibrate": true,
+    "n_train": 130173,
+    "n_positive": 9358,
+    "positive_rate": 0.0718889477848709,
+    "n_features": 7,
+    "train_accuracy": 0.9281110522151291,
+    "timestamp": "2026-01-30T01:36:06.893224"
+  }
+}
