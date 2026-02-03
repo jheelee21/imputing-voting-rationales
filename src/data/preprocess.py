@@ -32,15 +32,19 @@ class DataPreprocessor:
         df: pd.DataFrame,
         additional_features: List[str] = None,
         drop_high_missing: float = 1.0,
+        use_all_features: bool = False,
     ) -> pd.DataFrame:
         df = df.copy()
 
-        feature_cols = self.get_required_features()
+        if use_all_features:
+            feature_cols = df.columns.tolist()
+        else:
+            feature_cols = self.get_required_features()
 
-        if additional_features:
-            feature_cols.extend([f for f in additional_features if f in df.columns])
+            if additional_features:
+                feature_cols.extend([f for f in additional_features if f in df.columns])
 
-        feature_cols = list(set(feature_cols))
+            feature_cols = list(set(feature_cols))
 
         if drop_high_missing:
             missing_rates = df[feature_cols].isna().mean()
