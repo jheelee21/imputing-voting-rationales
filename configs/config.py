@@ -5,7 +5,6 @@ Centralized settings for models, data, and evaluation.
 
 from pathlib import Path
 from typing import List, Dict, Any
-from enum import Enum
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -21,6 +20,16 @@ DATA_CONFIG = {
     "min_dissent": 5,  # Filter: minimum dissenting votes
     "test_size": 0.2,
     "random_seed": 21,
+}
+
+# Feature engineering configuration
+FEATURE_CONFIG = {
+    "use_all_features": True,  # If True, use all available columns
+    "drop_high_missing": 0.5,  # Drop features with missing rate > threshold (0.0-1.0)
+    "exclude_cols": [        # Columns to always exclude from features
+        "meeting_id",        # Don't use as feature (per PDF)
+        "ind_dissent",       # Target-related, not a feature
+    ],
 }
 
 # Rationales configuration
@@ -42,11 +51,6 @@ REQUIRED_FEATURES = {
 # General features (must include)
 GENERAL_FEATURES = ["frac_vote_against"]
 CATEGORICAL_IDS = ["investor_id", "pid", "ProxySeason"]
-
-# Stratification options
-class StratifyOption(Enum):
-    INVESTOR_ID = "investor_id"
-    FIRM_ID = "pid"
 
 # Model configurations
 MODEL_CONFIGS = {

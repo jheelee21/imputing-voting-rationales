@@ -95,6 +95,25 @@ def main():
     parser.add_argument("--num_epochs", type=int, help="Training epochs (MC Dropout)")
     parser.add_argument("--dropout_rate", type=float, help="Dropout rate (MC Dropout)")
     
+    # Feature engineering configuration
+    parser.add_argument(
+        "--use_all_features",
+        action="store_true",
+        help="Use all available columns as features (subject to missing threshold)"
+    )
+    parser.add_argument(
+        "--drop_high_missing",
+        type=float,
+        default=1.0,
+        help="Drop features with missing rate > threshold (0.0-1.0, default=1.0 means keep all)"
+    )
+    parser.add_argument(
+        "--exclude_cols",
+        nargs="+",
+        default=None,
+        help="Columns to exclude from features (in addition to defaults)"
+    )
+    
     args = parser.parse_args()
     
     # Determine save directory
@@ -134,6 +153,12 @@ def main():
     config = MODEL_CONFIGS.get(args.model_type, {}).copy()
     config['calibrate'] = not args.no_calibrate
     config['random_seed'] = args.random_seed
+    
+    # Add feature configuration
+    config['use_all_features'] = args.use_all_features
+    config['drop_high_missing'] = args.drop_high_missing
+    if args.exclude_cols:
+        config['exclude_cols'] = args.exclude_cols
     
     # Override with command-line arguments
     custom_params = {}

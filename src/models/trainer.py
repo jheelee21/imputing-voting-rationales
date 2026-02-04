@@ -63,7 +63,13 @@ class ModelTrainer:
         
         # Prepare data
         X, y, feature_names = data_manager.prepare_for_training(
-            train_clean, [rationale], fit=True
+            train_clean, 
+            [rationale], 
+            fit=True,
+            drop_high_missing=self.config.get('drop_high_missing', 1.0),
+            use_all_features=self.config.get('use_all_features', False),
+            exclude_cols=self.config.get('exclude_cols', None),
+            verbose=verbose
         )
         
         # Extract single label
@@ -113,7 +119,13 @@ class ModelTrainer:
         # Prepare training data
         train_clean = train_df.dropna(subset=rationales, how='all').copy()
         X_train, y_train, feature_names = data_manager.prepare_for_training(
-            train_clean, rationales, fit=True
+            train_clean, 
+            rationales, 
+            fit=True,
+            drop_high_missing=self.config.get('drop_high_missing', 1.0),
+            use_all_features=self.config.get('use_all_features', False),
+            exclude_cols=self.config.get('exclude_cols', None),
+            verbose=verbose
         )
         
         # Prepare validation data
