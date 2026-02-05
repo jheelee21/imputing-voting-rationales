@@ -31,7 +31,7 @@ from configs.config import (
     DATA_CONFIG, MODELS_DIR, CORE_RATIONALES
 )
 from src.data.data_manager import DataManager
-from src.models.extended_trainer import ExtendedModelTrainer
+from src.pipeline.extended_trainer import ExtendedModelTrainer
 
 
 def main():

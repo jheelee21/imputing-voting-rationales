@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs.config import DATA_CONFIG, RESULTS_DIR, CORE_RATIONALES
 from src.data.data_manager import DataManager
-from src.evaluation.evaluator import ModelEvaluator
+from src.pipeline.evaluator import ModelEvaluator
 from src.models.base_model import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 

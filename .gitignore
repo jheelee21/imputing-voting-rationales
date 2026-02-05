@@ -11,3 +11,4 @@ old/*
 *.pkl
 models/*
 catboost_info/*
+predictions/*

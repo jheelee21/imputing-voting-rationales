@@ -18,7 +18,7 @@ from configs.config import (
     DATA_CONFIG, MODELS_DIR, CORE_RATIONALES, MODEL_CONFIGS
 )
 from src.data.data_manager import DataManager
-from src.models.trainer import ModelTrainer
+from src.pipeline.trainer import ModelTrainer
 
 
 def main():
