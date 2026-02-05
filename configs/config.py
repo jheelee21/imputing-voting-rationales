@@ -1,6 +1,11 @@
 """
 Configuration file for voting rationales prediction project.
 Centralized settings for models, data, and evaluation.
+
+Modeling scope (strict):
+- We model the reason for dissent conditional on dissent having occurred (ind_dissent=1).
+- Training uses only dissent rows with at least one labeled rationale.
+- Prediction (imputation) targets dissent rows where all rationales are missing.
 """
 
 from pathlib import Path
@@ -23,12 +28,13 @@ DATA_CONFIG = {
 }
 
 # Feature engineering configuration
+# Default: use all variables with missing rate below threshold (drop_high_missing)
 FEATURE_CONFIG = {
-    "use_all_features": True,  # If True, use all available columns
-    "drop_high_missing": 0.5,  # Drop features with missing rate > threshold (0.0-1.0)
-    "exclude_cols": [        # Columns to always exclude from features
-        "meeting_id",        # Don't use as feature (per PDF)
-        "ind_dissent",       # Target-related, not a feature
+    "use_all_features": True,  # Default: use all available columns (subject to missing threshold)
+    "drop_high_missing": 0.5,   # Drop features with missing rate > this (0.0-1.0)
+    "exclude_cols": [          # Columns to always exclude from features
+        "meeting_id",          # Don't use as feature (per PDF)
+        "ind_dissent",         # Target-related, not a feature
     ],
 }
 

@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 """
-Unified training script for all model types.
+Unified training script for all model types (original + extended probabilistic).
 
 Usage:
+    # Original models
     python train.py --model_type logistic --rationales diversity indep tenure
     python train.py --model_type mc_dropout --rationales diversity indep tenure busyness
+
+    # Extended probabilistic models
+    python train.py --model_type bnn --rationales diversity indep tenure
+    python train.py --model_type catboost --rationales diversity indep tenure
+    python train.py --model_type lightgbm --rationales diversity indep tenure
+    python train.py --model_type xgboost --rationales diversity indep tenure
+    python train.py --model_type sparse_gp --rationales diversity indep
+    python train.py --model_type deep_kernel_gp --rationales diversity indep
 """
 
 import argparse
@@ -15,15 +24,28 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs.config import (
-    DATA_CONFIG, MODELS_DIR, CORE_RATIONALES, MODEL_CONFIGS
+    DATA_CONFIG, MODELS_DIR, CORE_RATIONALES, MODEL_CONFIGS, FEATURE_CONFIG,
 )
 from src.data.data_manager import DataManager
+
+# Original trainer (logistic, random_forest, gradient_boosting, mc_dropout)
 from src.pipeline.trainer import ModelTrainer
+
+# Extended trainer (bnn, catboost, lightgbm, xgboost, sparse_gp, deep_kernel_gp)
+try:
+    from src.pipeline.extended_trainer import ExtendedModelTrainer
+    EXTENDED_AVAILABLE = True
+except ImportError:
+    EXTENDED_AVAILABLE = False
+
+ORIGINAL_MODEL_TYPES = ["logistic", "random_forest", "gradient_boosting", "mc_dropout"]
+EXTENDED_MODEL_TYPES = ["bnn", "catboost", "lightgbm", "xgboost", "sparse_gp", "deep_kernel_gp"]
+ALL_MODEL_TYPES = ORIGINAL_MODEL_TYPES + EXTENDED_MODEL_TYPES
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train voting rationale prediction models",
+        description="Train voting rationale prediction models (original + extended probabilistic)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -32,7 +54,7 @@ def main():
         "--model_type",
         type=str,
         default="logistic",
-        choices=["logistic", "random_forest", "gradient_boosting", "mc_dropout"],
+        choices=ALL_MODEL_TYPES,
         help="Type of model to train"
     )
     parser.add_argument(
@@ -84,37 +106,52 @@ def main():
     parser.add_argument(
         "--no_calibrate",
         action="store_true",
-        help="Disable probability calibration (supervised models only)"
+        help="Disable probability calibration (supervised/boosting models only)"
     )
     
-    # Model-specific hyperparameters
+    # Original model hyperparameters
     parser.add_argument("--C", type=float, help="Regularization (logistic)")
     parser.add_argument("--max_depth", type=int, help="Max depth (tree models)")
     parser.add_argument("--n_estimators", type=int, help="Number of estimators (tree models)")
     parser.add_argument("--learning_rate", type=float, help="Learning rate")
-    parser.add_argument("--num_epochs", type=int, help="Training epochs (MC Dropout)")
+    parser.add_argument("--num_epochs", type=int, help="Training epochs (NN models)")
     parser.add_argument("--dropout_rate", type=float, help="Dropout rate (MC Dropout)")
     
-    # Feature engineering configuration
+    # Feature engineering configuration (default: all variables with missing rate below threshold)
     parser.add_argument(
-        "--use_all_features",
+        "--required_only",
         action="store_true",
-        help="Use all available columns as features (subject to missing threshold)"
+        help="Use only required features per rationale (default: use all variables with missing rate < threshold)"
     )
     parser.add_argument(
         "--drop_high_missing",
         type=float,
-        default=1.0,
-        help="Drop features with missing rate > threshold (0.0-1.0, default=1.0 means keep all)"
+        default=None,
+        help="Drop features with missing rate > threshold (0.0-1.0). Default from config (0.5)"
     )
     parser.add_argument(
         "--exclude_cols",
         nargs="+",
         default=None,
-        help="Columns to exclude from features (in addition to defaults)"
+        help="Columns to exclude from features. Default from config (meeting_id, ind_dissent)"
     )
     
+    # Extended model hyperparameters
+    parser.add_argument("--calibration_method", type=str, default="isotonic",
+                        choices=["isotonic", "sigmoid"], help="Calibration method (boosting)")
+    parser.add_argument("--prior_scale", type=float, default=1.0, help="Prior scale (BNN)")
+    parser.add_argument("--hidden_dims", nargs="+", type=int, default=[64, 32],
+                        help="Hidden layer dimensions (NN models)")
+    parser.add_argument("--batch_size", type=int, default=256, help="Batch size (NN models)")
+    parser.add_argument("--num_inducing", type=int, default=500, help="Number of inducing points (GP)")
+    parser.add_argument("--kernel_type", type=str, default="rbf",
+                        choices=["rbf", "matern"], help="Kernel type (GP)")
+    parser.add_argument("--no_ard", action="store_true", help="Disable ARD (GP)")
+    
     args = parser.parse_args()
+    
+    if args.model_type in EXTENDED_MODEL_TYPES and not EXTENDED_AVAILABLE:
+        sys.exit(f"Extended model '{args.model_type}' requires ExtendedModelTrainer. Install optional dependencies.")
     
     # Determine save directory
     if args.save_dir:
@@ -149,54 +186,100 @@ def main():
         rationales=args.rationales,
     )
     
-    # Build model configuration
-    config = MODEL_CONFIGS.get(args.model_type, {}).copy()
-    config['calibrate'] = not args.no_calibrate
-    config['random_seed'] = args.random_seed
+    use_extended = args.model_type in EXTENDED_MODEL_TYPES
     
-    # Add feature configuration
-    config['use_all_features'] = args.use_all_features
-    config['drop_high_missing'] = args.drop_high_missing
-    if args.exclude_cols:
-        config['exclude_cols'] = args.exclude_cols
-    
-    # Override with command-line arguments
-    custom_params = {}
-    if args.C is not None:
-        custom_params['C'] = args.C
-    if args.max_depth is not None:
-        custom_params['max_depth'] = args.max_depth
-    if args.n_estimators is not None:
-        custom_params['n_estimators'] = args.n_estimators
-    if args.learning_rate is not None:
-        config['learning_rate'] = args.learning_rate
-    if args.num_epochs is not None:
-        config['num_epochs'] = args.num_epochs
-    if args.dropout_rate is not None:
-        config['dropout_rate'] = args.dropout_rate
-    
-    if custom_params:
-        config['custom_params'] = custom_params
-    
-    # Train models
-    trainer = ModelTrainer(
-        model_type=args.model_type,
-        rationales=args.rationales,
-        config=config,
-    )
-    
-    models = trainer.train_all(
-        train_df=train_df,
-        rationales=args.rationales,
-        data_manager=data_manager,
-        val_df=val_df if args.model_type == "mc_dropout" else None,
-        save_dir=save_dir,
-    )
+    if use_extended:
+        # Config for extended trainer (default: all variables with missing rate < threshold)
+        config = {
+            'random_seed': args.random_seed,
+            'use_all_features': not args.required_only,
+            'drop_high_missing': args.drop_high_missing if args.drop_high_missing is not None else FEATURE_CONFIG.get('drop_high_missing', 0.5),
+            'exclude_cols': args.exclude_cols if args.exclude_cols is not None else FEATURE_CONFIG.get('exclude_cols'),
+            'missing_strategy': FEATURE_CONFIG.get('missing_strategy', 'median'),
+        }
+        if args.model_type in ['catboost', 'lightgbm', 'xgboost']:
+            config['calibrate'] = not args.no_calibrate
+            config['calibration_method'] = args.calibration_method
+            config['custom_params'] = {
+                'n_estimators': args.n_estimators or 500,
+                'max_depth': args.max_depth or 6,
+                'learning_rate': args.learning_rate or 0.03,
+            }
+        elif args.model_type in ['mc_dropout', 'bnn']:
+            config['hidden_dims'] = args.hidden_dims
+            config['learning_rate'] = args.learning_rate or (0.001 if args.model_type == 'mc_dropout' else 0.01)
+            config['num_epochs'] = args.num_epochs or 100
+            config['batch_size'] = args.batch_size
+            if args.model_type == 'mc_dropout':
+                config['dropout_rate'] = args.dropout_rate or 0.2
+            else:
+                config['prior_scale'] = args.prior_scale
+        elif args.model_type in ['sparse_gp', 'deep_kernel_gp']:
+            config['kernel_type'] = args.kernel_type
+            config['num_inducing'] = args.num_inducing
+            config['learning_rate'] = args.learning_rate or 0.01
+            config['num_epochs'] = args.num_epochs or 100
+            config['batch_size'] = args.batch_size
+            config['hidden_dims'] = args.hidden_dims
+            config['use_ard'] = not args.no_ard
+        
+        trainer = ExtendedModelTrainer(
+            model_type=args.model_type,
+            rationales=args.rationales,
+            config=config,
+        )
+        models = trainer.train_all(
+            train_df=train_df,
+            rationales=args.rationales,
+            data_manager=data_manager,
+            val_df=val_df,
+            save_dir=save_dir,
+        )
+    else:
+        # Config for original trainer (default: all variables with missing rate < threshold)
+        config = MODEL_CONFIGS.get(args.model_type, {}).copy()
+        config['calibrate'] = not args.no_calibrate
+        config['random_seed'] = args.random_seed
+        config['use_all_features'] = not args.required_only
+        config['drop_high_missing'] = args.drop_high_missing if args.drop_high_missing is not None else FEATURE_CONFIG.get('drop_high_missing', 0.5)
+        config['exclude_cols'] = args.exclude_cols if args.exclude_cols is not None else FEATURE_CONFIG.get('exclude_cols')
+        config['missing_strategy'] = FEATURE_CONFIG.get('missing_strategy', 'median')
+        
+        custom_params = {}
+        if args.C is not None:
+            custom_params['C'] = args.C
+        if args.max_depth is not None:
+            custom_params['max_depth'] = args.max_depth
+        if args.n_estimators is not None:
+            custom_params['n_estimators'] = args.n_estimators
+        if args.learning_rate is not None:
+            config['learning_rate'] = args.learning_rate
+        if args.num_epochs is not None:
+            config['num_epochs'] = args.num_epochs
+        if args.dropout_rate is not None:
+            config['dropout_rate'] = args.dropout_rate
+        if custom_params:
+            config['custom_params'] = custom_params
+        
+        trainer = ModelTrainer(
+            model_type=args.model_type,
+            rationales=args.rationales,
+            config=config,
+        )
+        models = trainer.train_all(
+            train_df=train_df,
+            rationales=args.rationales,
+            data_manager=data_manager,
+            val_df=val_df if args.model_type == "mc_dropout" else None,
+            save_dir=save_dir,
+        )
     
     print(f"\n{'='*80}")
     print("TRAINING COMPLETE")
     print(f"{'='*80}")
-    print(f"Models saved to: {save_dir}")
+    print(f"Models saved to: models/{model_type}")
+    print(f"\nTo evaluate, run:")
+    print(f"  python scripts/evaluate.py --model_dir models/{model_type}")
 
 
 if __name__ == "__main__":

@@ -235,19 +235,36 @@ class DataManager:
     def handle_missing(
         self,
         df: pd.DataFrame,
-        strategy: str = "zero"
+        strategy: str = "zero",
+        fit: bool = True,
     ) -> pd.DataFrame:
-        """Handle missing values in numerical columns."""
+        """
+        Handle missing values in numerical columns.
+        For median/mean, values are fitted on training data (fit=True) and stored;
+        at predict time (fit=False) stored values are used so train and inference match.
+        """
         df = df.copy()
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        
+
         if strategy == "median":
-            df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+            if fit:
+                self._imputation_values = df[numeric_cols].median().to_dict()
+            vals = getattr(self, '_imputation_values', None) or {}
+            for col in numeric_cols:
+                fill_val = vals.get(col, 0.0) if not fit else df[col].median()
+                df[col] = df[col].fillna(fill_val)
         elif strategy == "mean":
-            df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())
-        elif strategy == "zero":
+            if fit:
+                self._imputation_values = df[numeric_cols].mean().to_dict()
+            vals = getattr(self, '_imputation_values', None) or {}
+            for col in numeric_cols:
+                fill_val = vals.get(col, 0.0) if not fit else df[col].mean()
+                df[col] = df[col].fillna(fill_val)
+        else:  # "zero"
             df[numeric_cols] = df[numeric_cols].fillna(0)
-        
+            if fit and not hasattr(self, '_imputation_values'):
+                self._imputation_values = None
+
         return df
     
     def scale_features(
@@ -274,6 +291,7 @@ class DataManager:
         drop_high_missing: float = 1.0,
         use_all_features: bool = False,
         exclude_cols: List[str] = None,
+        missing_strategy: str = "zero",
         fit: bool = True,
         verbose: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
@@ -287,7 +305,8 @@ class DataManager:
             drop_high_missing: Drop features with missing rate > threshold (0.0-1.0)
             use_all_features: If True, use all available columns (subject to filtering)
             exclude_cols: Columns to explicitly exclude
-            fit: If True, fit scalers/encoders; if False, transform only
+            missing_strategy: Imputation for remaining missing numerics: "zero" | "median" | "mean"
+            fit: If True, fit scalers/encoders/imputation; if False, transform only
             verbose: Print detailed information
         
         Returns:
@@ -309,12 +328,15 @@ class DataManager:
         # Encode categorical
         X_df = self.encode_categorical(X_df, fit=fit)
         
-        # Handle missing
-        X_df = self.handle_missing(X_df)
+        # Handle missing (median/mean fitted on train, reused at predict)
+        X_df = self.handle_missing(X_df, strategy=missing_strategy, fit=fit)
         
-        # Separate numerical and categorical
+        # Separate numerical and categorical (use only _encoded for IDs; exclude raw categoricals from numerical)
         categorical_cols = [c for c in X_df.columns if c.endswith("_encoded")]
-        numerical_cols = [c for c in X_df.columns if c not in categorical_cols]
+        numerical_cols = [
+            c for c in X_df.columns
+            if c not in categorical_cols and c not in CATEGORICAL_IDS
+        ]
         
         # For inference (fit=False), ensure we use the exact same features as training
         if not fit and hasattr(self, '_training_numerical_cols'):

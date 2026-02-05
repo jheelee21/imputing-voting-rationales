@@ -69,6 +69,7 @@ class ModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
         
@@ -116,7 +117,7 @@ class ModelTrainer:
             print(f"Training MC DROPOUT for: {rationales}")
             print(f"{'='*80}")
         
-        # Prepare training data
+        # Prepare training data (only dissent rows with at least one rationale)
         train_clean = train_df.dropna(subset=rationales, how='all').copy()
         X_train, y_train, feature_names = data_manager.prepare_for_training(
             train_clean, 
@@ -125,19 +126,26 @@ class ModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
+        
+        # Mask for partial labels: only compute loss on observed rationales (don't treat missing as negative)
+        label_mask = train_clean[rationales].notna().values.astype(bool)
         
         # Prepare validation data
         X_val, y_val = None, None
         if val_df is not None:
             val_clean = val_df.dropna(subset=rationales, how='all').copy()
             X_val, y_val, _ = data_manager.prepare_for_training(
-                val_clean, rationales, fit=False
+                val_clean, rationales, fit=False,
+                missing_strategy=self.config.get('missing_strategy', 'zero'),
             )
         
         if verbose:
             print(f"Train: {len(y_train)} samples")
+            obs_frac = label_mask.mean()
+            print(f"Label coverage: {obs_frac:.1%} of rationale cells observed (masked loss)")
             if X_val is not None:
                 print(f"Val: {len(y_val)} samples")
         
@@ -155,7 +163,7 @@ class ModelTrainer:
         )
         
         model.feature_names = feature_names
-        model.fit(X_train, y_train, X_val, y_val, verbose=verbose)
+        model.fit(X_train, y_train, X_val, y_val, mask=label_mask, verbose=verbose)
         
         # Store training info
         self.training_info['mc_dropout'] = {

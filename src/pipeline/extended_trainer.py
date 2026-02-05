@@ -105,6 +105,7 @@ class ExtendedModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
         
@@ -161,6 +162,7 @@ class ExtendedModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
         
@@ -171,7 +173,8 @@ class ExtendedModelTrainer:
         if val_df is not None:
             val_clean = val_df.dropna(subset=[rationale]).copy()
             X_val, y_val_arr, _ = data_manager.prepare_for_training(
-                val_clean, [rationale], fit=False
+                val_clean, [rationale], fit=False,
+                missing_strategy=self.config.get('missing_strategy', 'zero'),
             )
             y_val = y_val_arr[:, 0] if y_val_arr.ndim > 1 else y_val_arr
         
@@ -223,6 +226,7 @@ class ExtendedModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
         
@@ -278,15 +282,24 @@ class ExtendedModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
+        
+        # Mask for partial labels: only compute loss on observed rationales
+        label_mask = train_clean[rationales].notna().values.astype(bool)
         
         X_val, y_val = None, None
         if val_df is not None:
             val_clean = val_df.dropna(subset=rationales, how='all').copy()
             X_val, y_val, _ = data_manager.prepare_for_training(
-                val_clean, rationales, fit=False
+                val_clean, rationales, fit=False,
+                missing_strategy=self.config.get('missing_strategy', 'zero'),
             )
+        
+        if verbose:
+            obs_frac = label_mask.mean()
+            print(f"Label coverage: {obs_frac:.1%} of rationale cells observed (masked loss)")
         
         model = MCDropoutModel(
             rationales=rationales,
@@ -301,7 +314,7 @@ class ExtendedModelTrainer:
         )
         
         model.feature_names = feature_names
-        model.fit(X_train, y_train, X_val, y_val, verbose=verbose)
+        model.fit(X_train, y_train, X_val, y_val, mask=label_mask, verbose=verbose)
         
         self.training_info['mc_dropout'] = {
             'n_train': len(y_train),
@@ -334,6 +347,7 @@ class ExtendedModelTrainer:
             drop_high_missing=self.config.get('drop_high_missing', 1.0),
             use_all_features=self.config.get('use_all_features', False),
             exclude_cols=self.config.get('exclude_cols', None),
+            missing_strategy=self.config.get('missing_strategy', 'zero'),
             verbose=verbose
         )
         
@@ -341,7 +355,8 @@ class ExtendedModelTrainer:
         if val_df is not None:
             val_clean = val_df.dropna(subset=rationales, how='all').copy()
             X_val, y_val, _ = data_manager.prepare_for_training(
-                val_clean, rationales, fit=False
+                val_clean, rationales, fit=False,
+                missing_strategy=self.config.get('missing_strategy', 'zero'),
             )
         
         model = BNNModel(

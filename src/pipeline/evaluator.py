@@ -18,6 +18,21 @@ from src.models.base_model import BaseRationaleModel, SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 
+# Optional: extended models (BNN, GP)
+try:
+    from src.models.bnn_model import BNNModel
+    BNN_AVAILABLE = True
+except ImportError:
+    BNNModel = None
+    BNN_AVAILABLE = False
+
+try:
+    from src.models.gaussian_process import GPModel
+    GP_AVAILABLE = True
+except ImportError:
+    GPModel = None
+    GP_AVAILABLE = False
+
 
 class ModelEvaluator:
     """Unified interface for evaluating all model types."""
@@ -93,6 +108,64 @@ class ModelEvaluator:
             'total_unc': total_unc,
         }
     
+    def _evaluate_uncertainty_model(
+        self,
+        model: BaseRationaleModel,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        rationales: List[str],
+        num_samples: int = 50,
+        model_type_name: str = "uncertainty",
+    ) -> Dict[str, Any]:
+        """Evaluate any model with predict_with_uncertainty (e.g. BNN)."""
+        mean_probs, epistemic_unc, total_unc = model.predict_with_uncertainty(
+            X_test, num_samples=num_samples
+        )
+        y_pred = (mean_probs >= 0.5).astype(int)
+        results = {}
+        for i, rationale in enumerate(rationales):
+            y_true = y_test[:, i]
+            y_p = y_pred[:, i]
+            y_pr = mean_probs[:, i]
+            metrics = self._compute_metrics(y_true, y_p, y_pr, rationale)
+            metrics['avg_epistemic_unc'] = float(epistemic_unc[:, i].mean())
+            metrics['avg_total_unc'] = float(total_unc[:, i].mean())
+            results[rationale] = {
+                'metrics': metrics,
+                'epistemic_unc': epistemic_unc[:, i],
+                'total_unc': total_unc[:, i],
+            }
+        return {
+            'model_type': model_type_name,
+            'results': results,
+            'y_true': y_test,
+            'y_pred': y_pred,
+            'y_prob': mean_probs,
+            'epistemic_unc': epistemic_unc,
+            'total_unc': total_unc,
+        }
+    
+    def evaluate_gp(
+        self,
+        model: BaseRationaleModel,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        rationale: str,
+    ) -> Dict[str, Any]:
+        """Evaluate single GP model (per-rationale, supervised-like)."""
+        y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)
+        if y_prob.ndim > 1:
+            y_prob = y_prob[:, 1] if y_prob.shape[1] > 1 else y_prob.ravel()
+        metrics = self._compute_metrics(y_test, y_pred, y_prob, rationale)
+        return {
+            'rationale': rationale,
+            'metrics': metrics,
+            'y_true': y_test,
+            'y_pred': y_pred,
+            'y_prob': y_prob,
+        }
+    
     def _compute_metrics(
         self,
         y_true: np.ndarray,
@@ -146,6 +219,7 @@ class ModelEvaluator:
         test_df: pd.DataFrame,
         data_manager: DataManager,
         output_dir: Optional[Path] = None,
+        num_samples: int = 50,
     ) -> Dict[str, Any]:
         """
         Evaluate any model type.
@@ -155,6 +229,7 @@ class ModelEvaluator:
             test_df: Test dataframe
             data_manager: DataManager instance
             output_dir: Directory to save results
+            num_samples: MC samples for uncertainty (MC Dropout / BNN only)
         
         Returns:
             Evaluation results dictionary
@@ -175,14 +250,19 @@ class ModelEvaluator:
         
         # Evaluate based on model type
         if isinstance(model, MCDropoutModel):
-            results = self.evaluate_mc_dropout(model, X_test, y_test, rationales)
+            results = self.evaluate_mc_dropout(model, X_test, y_test, rationales, num_samples=num_samples)
             self._print_mc_dropout_results(results)
-        
+        elif BNN_AVAILABLE and isinstance(model, BNNModel):
+            results = self._evaluate_uncertainty_model(model, X_test, y_test, rationales, num_samples=num_samples, model_type_name='bnn')
+            self._print_mc_dropout_results(results)
+        elif GP_AVAILABLE and isinstance(model, GPModel):
+            y_test_single = y_test[:, 0] if y_test.ndim > 1 else y_test
+            results = self.evaluate_gp(model, X_test, y_test_single, model.rationale)
+            self._print_supervised_results(results)
         elif isinstance(model, SupervisedRationaleModel):
             y_test_single = y_test[:, 0] if y_test.ndim > 1 else y_test
             results = self.evaluate_supervised(model, X_test, y_test_single, model.rationale)
             self._print_supervised_results(results)
-        
         else:
             raise ValueError(f"Unknown model type: {type(model)}")
         

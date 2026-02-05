@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from configs.config import DATA_CONFIG, RESULTS_DIR, ID_COLUMNS
+from configs.config import DATA_CONFIG, PROJECT_ROOT, ID_COLUMNS
 from src.data.data_manager import DataManager
 from src.pipeline.predictor import Predictor
 from src.models.base_model import SupervisedRationaleModel
@@ -57,7 +57,7 @@ def main():
         "--output_dir",
         type=str,
         default=None,
-        help="Directory to save predictions (default: results/predictions/{model_type})"
+        help="Directory to save predictions (default: predictions/{model_type})"
     )
     
     # Data configuration
@@ -114,7 +114,7 @@ def main():
         output_dir = Path(args.output_dir)
     else:
         model_type = model_dir.name
-        output_dir = RESULTS_DIR / "predictions" / model_type
+        output_dir = PROJECT_ROOT / "predictions" / model_type
     
     output_dir.mkdir(parents=True, exist_ok=True)
     

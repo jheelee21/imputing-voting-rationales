@@ -96,9 +96,15 @@ class MCDropoutModel(BaseRationaleModel):
         y: np.ndarray,
         X_val: Optional[np.ndarray] = None,
         y_val: Optional[np.ndarray] = None,
+        mask: Optional[np.ndarray] = None,
         verbose: bool = True,
     ):
-        """Train MC Dropout model."""
+        """
+        Train MC Dropout model.
+        If mask is provided (bool, shape = y.shape), loss is computed only on observed
+        labels (for partial/missing labels). This correctly models rationale prediction
+        conditional on dissent, without treating missing rationales as negative.
+        """
         input_dim = X.shape[1]
         output_dim = y.shape[1]
         
@@ -116,35 +122,58 @@ class MCDropoutModel(BaseRationaleModel):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        self.criterion = nn.BCEWithLogitsLoss()
+        self.criterion = nn.BCEWithLogitsLoss(reduction="none")
         
         # Convert to tensors
         X_train = torch.FloatTensor(X).to(self.device)
         y_train = torch.FloatTensor(y).to(self.device)
+        mask_tensor = (
+            torch.BoolTensor(mask).to(self.device) if mask is not None else None
+        )
         
-        # Create data loader
-        train_dataset = TensorDataset(X_train, y_train)
+        # Create data loader (include mask in dataset when present)
+        if mask_tensor is not None:
+            train_dataset = TensorDataset(X_train, y_train, mask_tensor)
+        else:
+            train_dataset = TensorDataset(X_train, y_train)
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
         
         if verbose:
             print(f"Training MC Dropout: {input_dim} features → {output_dim} outputs")
             print(f"Architecture: {input_dim} → {' → '.join(map(str, self.hidden_dims))} → {output_dim}")
             print(f"Device: {self.device}")
+            if mask_tensor is not None:
+                obs_frac = mask_tensor.float().mean().item()
+                print(f"Partial labels: {obs_frac:.1%} of label matrix observed (masked loss)")
         
         # Training loop
         for epoch in range(self.num_epochs):
             self.model.train()
             epoch_loss = 0.0
+            n_loss_terms = 0
             
-            for batch_x, batch_y in train_loader:
+            for batch in train_loader:
+                if mask_tensor is not None:
+                    batch_x, batch_y, batch_mask = batch
+                else:
+                    batch_x, batch_y = batch
+                    batch_mask = None
+                
                 self.optimizer.zero_grad()
                 logits = self.model(batch_x)
-                loss = self.criterion(logits, batch_y)
+                loss_per_element = self.criterion(logits, batch_y)
+                
+                if batch_mask is not None:
+                    loss = (loss_per_element * batch_mask.float()).sum() / batch_mask.float().sum().clamp(min=1)
+                else:
+                    loss = loss_per_element.mean()
+                
                 loss.backward()
                 self.optimizer.step()
                 epoch_loss += loss.item()
+                n_loss_terms += 1
             
-            avg_loss = epoch_loss / len(train_loader)
+            avg_loss = epoch_loss / n_loss_terms
             self.training_losses.append(avg_loss)
             
             if verbose and (epoch + 1) % 10 == 0:
