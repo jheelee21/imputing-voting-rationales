@@ -37,8 +37,11 @@ def plot_probability_distributions(
         probs = predictions_df[prob_col].dropna()
 
         # Histogram
-        ax.hist(probs, bins=50, alpha=0.7, edgecolor="black", density=True)
         ax.set_xlim(0, 1)
+        ax.set_ylim(0, 25)
+        bin_width = 0.025
+        bins = np.arange(min(probs), max(probs) + bin_width, bin_width)
+        ax.hist(probs, bins=bins, alpha=0.7, edgecolor="black", density=True)
 
         # Add mean line
         mean_prob = probs.mean()
@@ -50,15 +53,15 @@ def plot_probability_distributions(
             label=f"Mean: {mean_prob:.3f}",
         )
 
-        # Add median line
-        median_prob = probs.median()
-        ax.axvline(
-            median_prob,
-            color="blue",
-            linestyle="--",
-            linewidth=2,
-            label=f"Median: {median_prob:.3f}",
-        )
+        # # Add median line
+        # median_prob = probs.median()
+        # ax.axvline(
+        #     median_prob,
+        #     color="blue",
+        #     linestyle="--",
+        #     linewidth=2,
+        #     label=f"Median: {median_prob:.3f}",
+        # )
 
         ax.set_xlabel("Predicted Probability", fontsize=10)
         ax.set_ylabel("Density", fontsize=10)
@@ -268,6 +271,8 @@ def plot_boxplots(predictions_df: pd.DataFrame, rationales: list, output_dir: Pa
         data_list, labels=labels, patch_artist=True, notch=True, showmeans=True
     )
 
+    ax.set_ylim(0, 1)
+
     # Customize colors
     for patch in bp["boxes"]:
         patch.set_facecolor("lightblue")
@@ -290,7 +295,7 @@ def plot_boxplots(predictions_df: pd.DataFrame, rationales: list, output_dir: Pa
         fontweight="bold",
     )
     ax.grid(axis="y", alpha=0.3)
-    plt.xticks(rotation=45, ha="right")
+    plt.xticks()
 
     plt.tight_layout()
     output_path = output_dir / "probability_boxplots.png"
