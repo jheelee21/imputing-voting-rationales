@@ -380,7 +380,7 @@ def main():
     print("\nLoading predictions...")
 
     predictions_df = pd.read_csv(Path(args.pred_dir) / "predictions.csv")
-    
+
     output_dir = Path(args.pred_dir) / "visualizations"
     output_dir.mkdir(parents=True, exist_ok=True)
 

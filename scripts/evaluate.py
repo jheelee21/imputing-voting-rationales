@@ -26,6 +26,7 @@ from src.models.mc_dropout import MCDropoutModel
 # Optional: extended models
 try:
     from src.models.bnn_model import BNNModel
+
     BNN_AVAILABLE = True
 except ImportError:
     BNNModel = None
@@ -33,6 +34,7 @@ except ImportError:
 
 try:
     from src.models.calibrated_boosting import CalibratedBoostingModel
+
     BOOSTING_AVAILABLE = True
 except ImportError:
     CalibratedBoostingModel = None
@@ -40,6 +42,7 @@ except ImportError:
 
 try:
     from src.models.gaussian_process import GPModel
+
     GP_AVAILABLE = True
 except ImportError:
     GPModel = None
@@ -62,18 +65,18 @@ def load_models(model_dir: Path):
     # Multi-label: MC Dropout (single file)
     mc_dropout_path = model_dir / "mc_dropout_model.pkl"
     if mc_dropout_path.exists():
-        models['mc_dropout'] = MCDropoutModel.load(str(mc_dropout_path))
-        return models, 'mc_dropout'
+        models["mc_dropout"] = MCDropoutModel.load(str(mc_dropout_path))
+        return models, "mc_dropout"
 
     # Multi-label: BNN (single file)
     bnn_path = model_dir / "bnn_model.pkl"
     if bnn_path.exists() and BNN_AVAILABLE:
-        models['bnn'] = BNNModel.load(str(bnn_path))
-        return models, 'bnn'
+        models["bnn"] = BNNModel.load(str(bnn_path))
+        return models, "bnn"
     if bnn_path.exists() and not BNN_AVAILABLE:
-        with open(bnn_path, 'rb') as f:
-            models['bnn'] = pickle.load(f)
-        return models, 'bnn'
+        with open(bnn_path, "rb") as f:
+            models["bnn"] = pickle.load(f)
+        return models, "bnn"
 
     # Per-rationale: *_model.pkl (supervised, calibrated boosting, or GP)
     for model_path in sorted(model_dir.glob("*_model.pkl")):
@@ -89,44 +92,88 @@ def load_models(model_dir: Path):
             else:
                 model = SupervisedRationaleModel.load(str(model_path))
             models[rationale] = model
-            model_type = 'supervised'
+            model_type = "supervised"
         except Exception as e:
             try:
                 model = SupervisedRationaleModel.load(str(model_path))
                 models[rationale] = model
-                model_type = 'supervised'
+                model_type = "supervised"
             except Exception as e2:
                 print(f"Warning: Could not load {model_path.name}: {e2}")
 
-    return models, model_type or 'supervised'
+    return models, model_type or "supervised"
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate voting rationale prediction models (all types)",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--model_dir", type=str, required=True, help="Directory containing trained models")
-    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save results (default: results/{model_type})")
-    parser.add_argument("--data_path", type=str, default=DATA_CONFIG["data_path"], help="Path to data file")
-    parser.add_argument("--min_meetings_rat", type=int, default=DATA_CONFIG["min_meetings_rat"], help="Minimum N_Meetings_Rat filter")
-    parser.add_argument("--min_dissent", type=int, default=DATA_CONFIG["min_dissent"], help="Minimum N_dissent filter")
-    parser.add_argument("--test_size", type=float, default=DATA_CONFIG["test_size"], help="Test set proportion")
-    parser.add_argument("--random_seed", type=int, default=DATA_CONFIG["random_seed"], help="Random seed")
-    parser.add_argument("--num_mc_samples", type=int, default=50, help="MC samples for uncertainty (MC Dropout/BNN only)")
-    parser.add_argument("--no_plots", action="store_true", help="Disable plot generation")
+    parser.add_argument(
+        "--model_dir",
+        type=str,
+        required=True,
+        help="Directory containing trained models",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="Directory to save results (default: results/{model_type})",
+    )
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default=DATA_CONFIG["data_path"],
+        help="Path to data file",
+    )
+    parser.add_argument(
+        "--min_meetings_rat",
+        type=int,
+        default=DATA_CONFIG["min_meetings_rat"],
+        help="Minimum N_Meetings_Rat filter",
+    )
+    parser.add_argument(
+        "--min_dissent",
+        type=int,
+        default=DATA_CONFIG["min_dissent"],
+        help="Minimum N_dissent filter",
+    )
+    parser.add_argument(
+        "--test_size",
+        type=float,
+        default=DATA_CONFIG["test_size"],
+        help="Test set proportion",
+    )
+    parser.add_argument(
+        "--random_seed",
+        type=int,
+        default=DATA_CONFIG["random_seed"],
+        help="Random seed",
+    )
+    parser.add_argument(
+        "--num_mc_samples",
+        type=int,
+        default=50,
+        help="MC samples for uncertainty (MC Dropout/BNN only)",
+    )
+    parser.add_argument(
+        "--no_plots", action="store_true", help="Disable plot generation"
+    )
 
     args = parser.parse_args()
     model_dir = Path(args.model_dir)
-    output_dir = Path(args.output_dir) if args.output_dir else RESULTS_DIR / model_dir.name
+    output_dir = (
+        Path(args.output_dir) if args.output_dir else RESULTS_DIR / model_dir.name
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("="*80)
+    print("=" * 80)
     print("VOTING RATIONALE MODEL EVALUATION")
-    print("="*80)
+    print("=" * 80)
     print(f"Model dir: {model_dir}")
     print(f"Output dir: {output_dir}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     print("Loading models...")
     models, model_type = load_models(model_dir)
@@ -138,7 +185,7 @@ def main():
     # Data manager
     data_manager_path = model_dir / "data_manager.pkl"
     if data_manager_path.exists():
-        with open(data_manager_path, 'rb') as f:
+        with open(data_manager_path, "rb") as f:
             data_manager = pickle.load(f)
         print("Loaded data manager from training")
     else:
@@ -147,10 +194,16 @@ def main():
 
     print("\nLoading data...")
     data_manager.load_data(args.data_path)
-    data_manager.apply_filters(min_meetings_rat=args.min_meetings_rat, min_dissent=args.min_dissent)
+    data_manager.apply_filters(
+        min_meetings_rat=args.min_meetings_rat, min_dissent=args.min_dissent
+    )
 
     first_model = next(iter(models.values()))
-    if len(models) == 1 and hasattr(first_model, 'rationales') and isinstance(first_model.rationales, list):
+    if (
+        len(models) == 1
+        and hasattr(first_model, "rationales")
+        and isinstance(first_model.rationales, list)
+    ):
         rationales = first_model.rationales
     else:
         rationales = list(models.keys())
@@ -164,7 +217,7 @@ def main():
 
     evaluator = ModelEvaluator(save_plots=not args.no_plots)
 
-    if model_type in ('mc_dropout', 'bnn'):
+    if model_type in ("mc_dropout", "bnn"):
         model = next(iter(models.values()))
         results = evaluator.evaluate_model(
             model=model,
@@ -190,9 +243,9 @@ def main():
                 output_dir=output_dir,
             )
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("EVALUATION COMPLETE")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"Results saved to: {output_dir}")
 
 

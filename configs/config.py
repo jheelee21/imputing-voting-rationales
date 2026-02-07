@@ -31,10 +31,10 @@ DATA_CONFIG = {
 # Default: use all variables with missing rate below threshold (drop_high_missing)
 FEATURE_CONFIG = {
     "use_all_features": True,  # Default: use all available columns (subject to missing threshold)
-    "drop_high_missing": 0.5,   # Drop features with missing rate > this (0.0-1.0)
-    "exclude_cols": [          # Columns to always exclude from features
-        "meeting_id",          # Don't use as feature (per PDF)
-        "ind_dissent",         # Target-related, not a feature
+    "drop_high_missing": 0.5,  # Drop features with missing rate > this (0.0-1.0)
+    "exclude_cols": [  # Columns to always exclude from features
+        "meeting_id",  # Don't use as feature (per PDF)
+        "ind_dissent",  # Target-related, not a feature
     ],
 }
 
@@ -42,9 +42,18 @@ FEATURE_CONFIG = {
 CORE_RATIONALES = ["diversity", "indep", "tenure", "busyness", "combined_ceo_chairman"]
 
 ALL_RATIONALES = [
-    "diversity", "boardstructure", "indep", "tenure", "governance",
-    "combined_ceo_chairman", "esg_csr", "responsiveness", "attendance",
-    "compensation", "busyness", "norat_misc",
+    "diversity",
+    "boardstructure",
+    "indep",
+    "tenure",
+    "governance",
+    "combined_ceo_chairman",
+    "esg_csr",
+    "responsiveness",
+    "attendance",
+    "compensation",
+    "busyness",
+    "norat_misc",
 ]
 
 # Required features for each rationale (from PDF instructions)
