@@ -1,5 +1,6 @@
 """
 Unified predictor for generating predictions on unlabeled data.
+Updated to support semi-supervised models.
 """
 
 import numpy as np
@@ -10,6 +11,19 @@ from typing import Dict, List, Optional, Tuple
 from src.models.base_model import BaseRationaleModel, SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
+from src.models.bnn_model import BNNModel
+
+# Import semi-supervised models if available
+try:
+    from src.models.semi_supervised import (
+        PseudoLabelingSemiSupervised,
+        CoTrainingSemiSupervised
+    )
+    SEMI_SUPERVISED_AVAILABLE = True
+except ImportError:
+    PseudoLabelingSemiSupervised = None
+    CoTrainingSemiSupervised = None
+    SEMI_SUPERVISED_AVAILABLE = False
 
 
 class Predictor:
@@ -38,6 +52,7 @@ class Predictor:
     ) -> pd.DataFrame:
         """
         Generate predictions using supervised models (one per rationale).
+        Works for both regular supervised and semi-supervised models.
         
         Args:
             models: Dict of {rationale: model}
@@ -53,7 +68,7 @@ class Predictor:
         predictions_df = unlabeled_df[existing_ids].copy()
         
         print(f"\n{'='*80}")
-        print("GENERATING PREDICTIONS (Supervised)")
+        print("GENERATING PREDICTIONS (Supervised/Semi-Supervised)")
         print(f"{'='*80}")
         print(f"Unlabeled samples: {len(unlabeled_df):,}")
         print(f"Rationales: {list(models.keys())}")
@@ -147,6 +162,50 @@ class Predictor:
         
         return predictions_df
     
+    def predict_bnn(
+        self,
+        model: BNNModel,
+        unlabeled_df: pd.DataFrame,
+        data_manager: DataManager,
+        **kwargs
+    ) -> pd.DataFrame:
+        """
+        Generate predictions using Bayesian Neural Network model.
+        """
+        rationales = model.rationales
+        
+        # Start with ID columns
+        existing_ids = [c for c in self.id_columns if c in unlabeled_df.columns]
+        predictions_df = unlabeled_df[existing_ids].copy()
+        
+        print(f"\n{'='*80}")
+        print("GENERATING PREDICTIONS (Bayesian Neural Network)")
+        print(f"{'='*80}")
+        print(f"Unlabeled samples: {len(unlabeled_df):,}")
+        print(f"Rationales: {rationales}")
+        print(f"{'='*80}\n")
+        
+        # Prepare features
+        X, _, _ = data_manager.prepare_for_training(
+            unlabeled_df, rationales, fit=False
+        )
+        
+        # Get predictions with uncertainty
+        mean_probs, epistemic_unc, total_unc = model.predict_with_uncertainty(X)
+        
+        # Add probabilities and uncertainties
+        for i, rationale in enumerate(rationales):
+            predictions_df[f"{rationale}_prob"] = mean_probs[:, i]
+            predictions_df[f"{rationale}_epistemic_unc"] = epistemic_unc[:, i]
+            predictions_df[f"{rationale}_total_unc"] = total_unc[:, i]
+            
+            print(f"{rationale}:")
+            print(f"  Prob: mean={mean_probs[:, i].mean():.3f}, std={mean_probs[:, i].std():.3f}")
+            print(f"  Unc:  mean={epistemic_unc[:, i].mean():.3f}")
+        
+        return predictions_df
+    
+    
     def predict(
         self,
         models: Dict[str, BaseRationaleModel],
@@ -178,7 +237,26 @@ class Predictor:
                 **kwargs
             )
         
+        if isinstance(first_model, BNNModel):
+            return self.predict_bnn(
+                model=first_model,
+                unlabeled_df=unlabeled_df,
+                data_manager=data_manager,
+                **kwargs
+            )
+        
         elif isinstance(first_model, SupervisedRationaleModel):
+            return self.predict_supervised(
+                models=models,
+                unlabeled_df=unlabeled_df,
+                data_manager=data_manager,
+            )
+        
+        # Handle semi-supervised models (they inherit predict_proba from base supervised)
+        elif SEMI_SUPERVISED_AVAILABLE and (
+            isinstance(first_model, PseudoLabelingSemiSupervised) or
+            isinstance(first_model, CoTrainingSemiSupervised)
+        ):
             return self.predict_supervised(
                 models=models,
                 unlabeled_df=unlabeled_df,

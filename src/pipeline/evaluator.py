@@ -307,7 +307,7 @@ class ModelEvaluator:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Save metrics CSV
-        if model_type == 'mc_dropout':
+        if model_type == 'mc_dropout' or model_type == 'bnn':
             metrics_list = []
             for rationale, res in results['results'].items():
                 metric_dict = res['metrics'].copy()

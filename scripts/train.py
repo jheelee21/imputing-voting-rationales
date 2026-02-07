@@ -277,9 +277,9 @@ def main():
     print(f"\n{'='*80}")
     print("TRAINING COMPLETE")
     print(f"{'='*80}")
-    print(f"Models saved to: models/{model_type}")
+    print(f"Models saved to: models/{args.model_type}")
     print(f"\nTo evaluate, run:")
-    print(f"  python scripts/evaluate.py --model_dir models/{model_type}")
+    print(f"  python scripts/evaluate.py --model_dir models/{args.model_type}")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from src.data.data_manager import DataManager
 from src.pipeline.predictor import Predictor
 from src.models.base_model import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
+from src.models.bnn_model import BNNModel
 
 
 def load_models(model_dir: Path):
@@ -31,12 +32,18 @@ def load_models(model_dir: Path):
         models['mc_dropout'] = MCDropoutModel.load(str(mc_dropout_path))
         return models
     
+    # check for bnn model
+    bnn_path = model_dir / "bnn_model.pkl"
+    if bnn_path.exists():
+        models['bnn'] = BNNModel.load(str(bnn_path))
+        return models
+    
     # Load supervised models
     for model_path in model_dir.glob("*_model.pkl"):
         if model_path.stem != "mc_dropout_model":
             rationale = model_path.stem.replace("_model", "")
             models[rationale] = SupervisedRationaleModel.load(str(model_path))
-    
+
     return models
 
 

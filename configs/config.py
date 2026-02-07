@@ -24,7 +24,7 @@ DATA_CONFIG = {
     "min_meetings_rat": 1,  # Filter: minimum meetings with rationales
     "min_dissent": 5,  # Filter: minimum dissenting votes
     "test_size": 0.2,
-    "random_seed": 21,
+    "random_seed": 123,
 }
 
 # Feature engineering configuration
