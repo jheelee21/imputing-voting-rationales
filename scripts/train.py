@@ -1,27 +1,7 @@
 #!/usr/bin/env python3
-"""
-Unified training script for all model types (original + extended probabilistic).
-
-Usage:
-    # Original models
-    python train.py --model_type logistic --rationales diversity indep tenure
-    python train.py --model_type mc_dropout --rationales diversity indep tenure busyness
-
-    # Extended probabilistic models
-    python train.py --model_type bnn --rationales diversity indep tenure
-    python train.py --model_type catboost --rationales diversity indep tenure
-    python train.py --model_type lightgbm --rationales diversity indep tenure
-    python train.py --model_type xgboost --rationales diversity indep tenure
-    python train.py --model_type sparse_gp --rationales diversity indep
-    python train.py --model_type deep_kernel_gp --rationales diversity indep
-"""
-
 import argparse
 import sys
 from pathlib import Path
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs.config import (
     DATA_CONFIG,
@@ -31,11 +11,9 @@ from configs.config import (
     FEATURE_CONFIG,
 )
 from src.data.data_manager import DataManager
-
-# Original trainer (logistic, random_forest, gradient_boosting, mc_dropout)
 from src.pipeline.trainer import ModelTrainer
+from src.utils.types import ModelType
 
-# Extended trainer (bnn, catboost, lightgbm, xgboost, sparse_gp, deep_kernel_gp)
 try:
     from src.pipeline.extended_trainer import ExtendedModelTrainer
 
@@ -51,13 +29,14 @@ EXTENDED_MODEL_TYPES = [
     "xgboost",
     "sparse_gp",
     "deep_kernel_gp",
+    "pca",
 ]
 ALL_MODEL_TYPES = ORIGINAL_MODEL_TYPES + EXTENDED_MODEL_TYPES
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train voting rationale prediction models (original + extended probabilistic)",
+        description="Train voting rationale prediction models (original + extended + PCA)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -180,6 +159,32 @@ def main():
     )
     parser.add_argument("--no_ard", action="store_true", help="Disable ARD (GP)")
 
+    # PCA-specific hyperparameters
+    parser.add_argument(
+        "--n_components",
+        type=int,
+        default=None,
+        help="Number of PCA components (None = auto-select based on variance_threshold)",
+    )
+    parser.add_argument(
+        "--variance_threshold",
+        type=float,
+        default=0.95,
+        help="Variance threshold for PCA component selection (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--pca_classifier",
+        type=str,
+        default="logistic",
+        choices=["logistic", "random_forest", "gradient_boosting"],
+        help="Classifier to use on PCA features",
+    )
+    parser.add_argument(
+        "--whiten",
+        action="store_true",
+        help="Apply whitening to PCA components",
+    )
+
     args = parser.parse_args()
 
     if args.model_type in EXTENDED_MODEL_TYPES and not EXTENDED_AVAILABLE:
@@ -203,6 +208,16 @@ def main():
     print(f"Rationales: {args.rationales}")
     print(f"Data: {args.data_path}")
     print(f"Save dir: {save_dir}")
+
+    # Print PCA-specific config if applicable
+    if args.model_type == "pca":
+        print(f"\nPCA Configuration:")
+        print(
+            f"  Components: {args.n_components or f'auto ({args.variance_threshold:.0%} variance)'}"
+        )
+        print(f"  Classifier: {args.pca_classifier}")
+        print(f"  Whitening: {args.whiten}")
+
     print("=" * 80 + "\n")
 
     # Load and prepare data
@@ -234,7 +249,26 @@ def main():
             else FEATURE_CONFIG.get("exclude_cols"),
             "missing_strategy": FEATURE_CONFIG.get("missing_strategy", "median"),
         }
-        if args.model_type in ["catboost", "lightgbm", "xgboost"]:
+
+        # PCA-specific configuration
+        if args.model_type == "pca":
+            config["n_components"] = args.n_components
+            config["variance_threshold"] = args.variance_threshold
+            config["pca_classifier"] = args.pca_classifier
+            config["whiten"] = args.whiten
+            config["calibrate"] = not args.no_calibrate
+            # Add custom params for the PCA's base classifier
+            custom_params = {}
+            if args.C is not None:
+                custom_params["C"] = args.C
+            if args.max_depth is not None:
+                custom_params["max_depth"] = args.max_depth
+            if args.n_estimators is not None:
+                custom_params["n_estimators"] = args.n_estimators
+            if custom_params:
+                config["custom_params"] = custom_params
+
+        elif args.model_type in ["catboost", "lightgbm", "xgboost"]:
             config["calibrate"] = not args.no_calibrate
             config["calibration_method"] = args.calibration_method
             config["custom_params"] = {
@@ -327,6 +361,12 @@ def main():
     print(f"Models saved to: models/{args.model_type}")
     print(f"\nTo evaluate, run:")
     print(f"  python scripts/evaluate.py --model_dir models/{args.model_type}")
+
+    if args.model_type == "pca":
+        print(f"\nPCA models trained successfully!")
+        print(
+            f"Check models/{args.model_type}/training_info.json for component details"
+        )
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Unified evaluation script for all model types (original + extended).
+Unified evaluation script for all model types (original + extended + PCA).
 
 Usage:
     python evaluate.py --model_dir models/logistic
     python evaluate.py --model_dir models/mc_dropout --num_mc_samples 100
     python evaluate.py --model_dir models/bnn --num_mc_samples 100
     python evaluate.py --model_dir models/catboost
-    python evaluate.py --model_dir models/sparse_gp
+    python evaluate.py --model_dir models/pca
 """
 
 import argparse
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from configs.config import DATA_CONFIG, RESULTS_DIR, CORE_RATIONALES
 from src.data.data_manager import DataManager
 from src.pipeline.evaluator import ModelEvaluator
-from src.models.base_model import SupervisedRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 
 # Optional: extended models
@@ -48,12 +48,20 @@ except ImportError:
     GPModel = None
     GP_AVAILABLE = False
 
+try:
+    from src.models.pca_model import PCAModel
+
+    PCA_AVAILABLE = True
+except ImportError:
+    PCAModel = None
+    PCA_AVAILABLE = False
+
 
 def load_models(model_dir: Path):
     """
     Load all models from directory.
     Returns (models dict, model_type str).
-    model_type: 'mc_dropout' | 'bnn' | 'supervised' (covers logistic, rf, gb, catboost, lightgbm, xgboost, gp)
+    model_type: 'mc_dropout' | 'bnn' | 'supervised' | 'pca'
     """
     models = {}
     model_type = None
@@ -78,28 +86,57 @@ def load_models(model_dir: Path):
             models["bnn"] = pickle.load(f)
         return models, "bnn"
 
-    # Per-rationale: *_model.pkl (supervised, calibrated boosting, or GP)
+    # Per-rationale: *_model.pkl (supervised, PCA, calibrated boosting, or GP)
     for model_path in sorted(model_dir.glob("*_model.pkl")):
         stem = model_path.stem
         if stem in ("mc_dropout_model", "bnn_model"):
             continue
         rationale = stem.replace("_model", "")
+
         try:
-            if BOOSTING_AVAILABLE:
-                model = CalibratedBoostingModel.load(str(model_path))
-            elif GP_AVAILABLE:
-                model = GPModel.load(str(model_path))
+            # Peek at the pickle to determine model type
+            with open(model_path, "rb") as f:
+                temp_obj = pickle.load(f)
+
+            # Check if it's a PCA model
+            if isinstance(temp_obj, dict) and "pca" in temp_obj:
+                if PCA_AVAILABLE:
+                    model = PCAModel.load(str(model_path))
+                    models[rationale] = model
+                    model_type = "pca"
+                else:
+                    print(
+                        f"Warning: PCA model found but PCAModel not available: {rationale}"
+                    )
+                    continue
             else:
-                model = SupervisedRationaleModel.load(str(model_path))
-            models[rationale] = model
-            model_type = "supervised"
+                # Try different loaders
+                if hasattr(temp_obj, "predict_proba"):
+                    # Already a model object
+                    models[rationale] = temp_obj
+                    model_type = "supervised"
+                else:
+                    # Try supervised loader
+                    try:
+                        if BOOSTING_AVAILABLE:
+                            model = CalibratedBoostingModel.load(str(model_path))
+                        elif GP_AVAILABLE:
+                            model = GPModel.load(str(model_path))
+                        else:
+                            model = SupervisedRationaleModel.load(str(model_path))
+                        models[rationale] = model
+                        model_type = "supervised"
+                    except Exception as e:
+                        try:
+                            model = SupervisedRationaleModel.load(str(model_path))
+                            models[rationale] = model
+                            model_type = "supervised"
+                        except Exception as e2:
+                            print(f"Warning: Could not load {model_path.name}: {e2}")
+
         except Exception as e:
-            try:
-                model = SupervisedRationaleModel.load(str(model_path))
-                models[rationale] = model
-                model_type = "supervised"
-            except Exception as e2:
-                print(f"Warning: Could not load {model_path.name}: {e2}")
+            print(f"Warning: Error loading {model_path.name}: {e}")
+            continue
 
     return models, model_type or "supervised"
 

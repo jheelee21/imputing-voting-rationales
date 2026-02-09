@@ -105,7 +105,7 @@ class SemiSupervisedTrainer:
             if verbose:
                 print(f"No unlabeled data for {rationale}. Using supervised learning.")
             # Fall back to supervised
-            from src.models.base_model import SupervisedRationaleModel
+            from src.models.supervised import SupervisedRationaleModel
 
             model = SupervisedRationaleModel(
                 rationale=rationale,

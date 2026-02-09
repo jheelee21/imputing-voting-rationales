@@ -20,7 +20,8 @@ from sklearn.metrics import (
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from src.models.base_model import BaseRationaleModel, SupervisedRationaleModel
+from src.models.base_model import BaseRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 

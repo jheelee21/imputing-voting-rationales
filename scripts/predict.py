@@ -5,6 +5,7 @@ Unified prediction script for generating predictions on unlabeled data.
 Usage:
     python predict.py --model_dir models/logistic --output_dir results/predictions
     python predict.py --model_dir models/mc_dropout --include_uncertainty
+    python predict.py --model_dir models/pca --output_dir predictions/pca
 """
 
 import argparse
@@ -17,13 +18,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from configs.config import DATA_CONFIG, PROJECT_ROOT, ID_COLUMNS
 from src.data.data_manager import DataManager
 from src.pipeline.predictor import Predictor
-from src.models.base_model import SupervisedRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.models.bnn_model import BNNModel
 
 
 def load_models(model_dir: Path):
-    """Load all models from directory."""
+    """Load all models from directory, including PCA models."""
     models = {}
 
     # Check for MC Dropout model
@@ -32,17 +33,55 @@ def load_models(model_dir: Path):
         models["mc_dropout"] = MCDropoutModel.load(str(mc_dropout_path))
         return models
 
-    # check for bnn model
+    # Check for BNN model
     bnn_path = model_dir / "bnn_model.pkl"
     if bnn_path.exists():
         models["bnn"] = BNNModel.load(str(bnn_path))
         return models
 
-    # Load supervised models
+    # Try to import PCA model
+    try:
+        from src.models.pca_model import PCAModel
+
+        PCA_AVAILABLE = True
+    except ImportError:
+        PCA_AVAILABLE = False
+
+    # Load per-rationale models (supervised, PCA, boosting, GP, etc.)
     for model_path in model_dir.glob("*_model.pkl"):
-        if model_path.stem != "mc_dropout_model":
-            rationale = model_path.stem.replace("_model", "")
-            models[rationale] = SupervisedRationaleModel.load(str(model_path))
+        if model_path.stem in ["mc_dropout_model", "bnn_model"]:
+            continue
+
+        rationale = model_path.stem.replace("_model", "")
+
+        try:
+            # Peek at the pickle to determine model type
+            with open(model_path, "rb") as f:
+                temp_obj = pickle.load(f)
+
+            # Check if it's a PCA model (saved as dict with 'pca' key)
+            if isinstance(temp_obj, dict) and "pca" in temp_obj:
+                if PCA_AVAILABLE:
+                    models[rationale] = PCAModel.load(str(model_path))
+                    print(f"Loaded PCA model: {rationale}")
+                else:
+                    print(
+                        f"Warning: PCA model found but PCAModel not available: {rationale}"
+                    )
+            else:
+                # Try to reload as object (might have been pickled directly)
+                if hasattr(temp_obj, "predict_proba"):
+                    # It's already a model object
+                    models[rationale] = temp_obj
+                    print(f"Loaded model: {rationale}")
+                else:
+                    # Use SupervisedRationaleModel loader
+                    models[rationale] = SupervisedRationaleModel.load(str(model_path))
+                    print(f"Loaded supervised model: {rationale}")
+
+        except Exception as e:
+            print(f"Warning: Could not load {model_path.name}: {e}")
+            continue
 
     return models
 
@@ -159,7 +198,19 @@ def main():
 
     # Get rationales from models
     first_model = next(iter(models.values()))
-    rationales = first_model.rationales
+
+    # Handle different model types
+    if hasattr(first_model, "rationales"):
+        # Multi-label models (MC Dropout, BNN)
+        rationales = first_model.rationales
+    elif hasattr(first_model, "rationale"):
+        # Single-label models (Supervised, PCA, etc.)
+        rationales = [m.rationale for m in models.values() if hasattr(m, "rationale")]
+    else:
+        # Fallback: use model keys as rationales
+        rationales = list(models.keys())
+
+    print(f"Rationales: {rationales}")
 
     # Get unlabeled data
     unlabeled_df = data_manager.get_unlabeled_data(rationales)

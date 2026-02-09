@@ -399,3 +399,24 @@ class DataManager:
             print(f"Total features: {len(feature_names)}")
 
         return X, y, feature_names
+
+    # all entries with missing rationales are treated as unlabeled, so we can use them for inference
+    def prepare_for_inference(
+        self,
+        df: pd.DataFrame,
+        rationales: List[str],
+    ):
+        """
+        Lightweight wrapper around prepare_for_training for inference.
+
+        At prediction time we typically pass in a pre-filtered dataframe
+        (e.g. output of get_unlabeled_data). Here we just reuse the exact
+        preprocessing pipeline but with fit=False so that scalers,
+        encoders, and imputation parameters learned during training are
+        applied consistently.
+        """
+        return self.prepare_for_training(
+            df=df,
+            rationales=rationales,
+            fit=False,
+        )

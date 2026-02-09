@@ -20,7 +20,8 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from src.models.base_model import BaseRationaleModel, SupervisedRationaleModel
+from src.models.base_model import BaseRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 
 
 class PseudoLabelingSemiSupervised(BaseRationaleModel):

@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
-from src.models.base_model import SupervisedRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 
 try:
     from catboost import CatBoostClassifier

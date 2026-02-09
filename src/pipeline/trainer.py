@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 import pickle
 
-from src.models.base_model import SupervisedRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 
@@ -25,18 +25,10 @@ class ModelTrainer:
         rationales: List[str] = None,
         config: Dict[str, Any] = None,
     ):
-        """
-        Initialize trainer.
-
-        Args:
-            model_type: One of ['logistic', 'random_forest', 'gradient_boosting', 'mc_dropout']
-            rationales: List of rationales to predict
-            config: Model configuration dict
-        """
         self.model_type = model_type
         self.rationales = rationales
         self.config = config or {}
-        self.models = {}  # For supervised: {rationale: model}
+        self.models = {}
         self.data_manager = None
         self.training_info = {}
 
@@ -46,7 +38,7 @@ class ModelTrainer:
         rationale: str,
         data_manager: DataManager,
         verbose: bool = True,
-    ) -> SupervisedRationaleModel:
+    ):
         """Train a single supervised model for one rationale."""
 
         if verbose:
@@ -69,7 +61,7 @@ class ModelTrainer:
             drop_high_missing=self.config.get("drop_high_missing", 1.0),
             use_all_features=self.config.get("use_all_features", False),
             exclude_cols=self.config.get("exclude_cols", None),
-            missing_strategy=self.config.get("missing_strategy", "zero"),
+            missing_strategy=self.config.get("missing_strategy", "mean"),
             verbose=verbose,
         )
 
@@ -219,27 +211,23 @@ class ModelTrainer:
                     json.dump(self.training_info, f, indent=2)
 
         else:
-            # Train separate supervised models for each rationale
             for rationale in rationales:
                 model = self.train_supervised(train_df, rationale, data_manager)
 
                 if model is not None:
                     self.models[rationale] = model
 
-                    # Save if requested
-                    if save_dir:
-                        save_dir = Path(save_dir)
-                        save_dir.mkdir(parents=True, exist_ok=True)
+                    save_dir = Path(save_dir)
+                    save_dir.mkdir(parents=True, exist_ok=True)
 
-                        model.save(str(save_dir / f"{rationale}_model.pkl"))
+                    model.save(str(save_dir / f"{rationale}_model.pkl"))
 
             # Save data manager and training info
-            if save_dir:
-                with open(save_dir / "data_manager.pkl", "wb") as f:
-                    pickle.dump(data_manager, f)
+            with open(save_dir / "data_manager.pkl", "wb") as f:
+                pickle.dump(data_manager, f)
 
-                with open(save_dir / "training_info.json", "w") as f:
-                    json.dump(self.training_info, f, indent=2)
+            with open(save_dir / "training_info.json", "w") as f:
+                json.dump(self.training_info, f, indent=2)
 
         # Print summary
         self._print_training_summary()

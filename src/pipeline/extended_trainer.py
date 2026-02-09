@@ -1,6 +1,6 @@
 """
 Extended model trainer supporting all probabilistic models.
-Handles BNN, Calibrated Boosting, Gaussian Processes, and existing models.
+Handles BNN, Calibrated Boosting, Gaussian Processes, PCA, and existing models.
 """
 
 import numpy as np
@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any
 import json
 import pickle
 
-from src.models.base_model import SupervisedRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 
@@ -42,6 +42,14 @@ except ImportError:
     GP_AVAILABLE = False
     print("Warning: Gaussian Process models not available")
 
+try:
+    from src.models.pca_model import PCAModel
+
+    PCA_AVAILABLE = True
+except ImportError:
+    PCA_AVAILABLE = False
+    print("Warning: PCA model not available")
+
 
 class ExtendedModelTrainer:
     """
@@ -53,6 +61,7 @@ class ExtendedModelTrainer:
     - 'bnn': Bayesian Neural Network
     - 'catboost', 'lightgbm', 'xgboost': Calibrated boosting models
     - 'sparse_gp', 'deep_kernel_gp': Gaussian Process models
+    - 'pca': PCA + Classifier
     """
 
     def __init__(
@@ -86,6 +95,9 @@ class ExtendedModelTrainer:
 
         if self.model_type in gp_models and not GP_AVAILABLE:
             raise ImportError("GP models not available. Install gpytorch")
+
+        if self.model_type == "pca" and not PCA_AVAILABLE:
+            raise ImportError("PCA model not available. Check src/models/pca_model.py")
 
     def train_supervised(
         self,
@@ -143,6 +155,77 @@ class ExtendedModelTrainer:
             "train_accuracy": (model.predict(X) == y_single).mean()
             if model.is_fitted
             else 0.0,
+        }
+
+        return model
+
+    def train_pca(
+        self,
+        train_df: pd.DataFrame,
+        rationale: str,
+        data_manager: DataManager,
+        val_df: Optional[pd.DataFrame] = None,
+        verbose: bool = True,
+    ):
+        """Train PCA model for single rationale."""
+        if verbose:
+            print(f"\n{'=' * 80}")
+            print(f"Training PCA for: {rationale}")
+            print(f"{'=' * 80}")
+
+        train_clean = train_df.dropna(subset=[rationale]).copy()
+
+        if len(train_clean) == 0:
+            print(f"No training data for {rationale}")
+            return None
+
+        X, y, feature_names = data_manager.prepare_for_training(
+            train_clean,
+            [rationale],
+            fit=True,
+            drop_high_missing=self.config.get("drop_high_missing", 1.0),
+            use_all_features=self.config.get("use_all_features", False),
+            exclude_cols=self.config.get("exclude_cols", None),
+            missing_strategy=self.config.get("missing_strategy", "zero"),
+            verbose=verbose,
+        )
+
+        y_single = y[:, 0] if y.ndim > 1 else y
+
+        # Prepare validation data if available
+        X_val, y_val = None, None
+        if val_df is not None:
+            val_clean = val_df.dropna(subset=[rationale]).copy()
+            if len(val_clean) > 0:
+                X_val, y_val_arr, _ = data_manager.prepare_for_training(
+                    val_clean,
+                    [rationale],
+                    fit=False,
+                    missing_strategy=self.config.get("missing_strategy", "zero"),
+                )
+                y_val = y_val_arr[:, 0] if y_val_arr.ndim > 1 else y_val_arr
+
+        model = PCAModel(
+            rationale=rationale,
+            n_components=self.config.get("n_components"),
+            variance_threshold=self.config.get("variance_threshold", 0.95),
+            base_model_type=self.config.get("pca_classifier", "logistic"),
+            calibrate=self.config.get("calibrate", True),
+            whiten=self.config.get("whiten", False),
+            custom_params=self.config.get("custom_params"),
+            random_seed=self.config.get("random_seed", 21),
+        )
+
+        model.feature_names = feature_names
+        model.fit(X, y_single, X_val, y_val, verbose=verbose)
+
+        self.training_info[rationale] = {
+            "n_train": len(y_single),
+            "n_positive": int(y_single.sum()),
+            "positive_rate": float(y_single.mean()),
+            "n_features_original": X.shape[1],
+            "n_components": model.n_components_used_,
+            "explained_variance": float(model.explained_variance_ratio_.sum()),
         }
 
         return model
@@ -446,6 +529,8 @@ class ExtendedModelTrainer:
                     )
                 elif self.model_type in ["sparse_gp", "deep_kernel_gp"]:
                     model = self.train_gp(train_df, rationale, data_manager, val_df)
+                elif self.model_type == "pca":
+                    model = self.train_pca(train_df, rationale, data_manager, val_df)
                 else:
                     model = self.train_supervised(train_df, rationale, data_manager)
 

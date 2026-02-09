@@ -6,25 +6,14 @@ Updated to support semi-supervised models.
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
-from src.models.base_model import BaseRationaleModel, SupervisedRationaleModel
+from src.models.base_model import BaseRationaleModel
+from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 from src.models.bnn_model import BNNModel
-
-# Import semi-supervised models if available
-try:
-    from src.models.semi_supervised import (
-        PseudoLabelingSemiSupervised,
-        CoTrainingSemiSupervised,
-    )
-
-    SEMI_SUPERVISED_AVAILABLE = True
-except ImportError:
-    PseudoLabelingSemiSupervised = None
-    CoTrainingSemiSupervised = None
-    SEMI_SUPERVISED_AVAILABLE = False
+from configs.config import CATEGORICAL_IDS
 
 
 class Predictor:
@@ -35,22 +24,10 @@ class Predictor:
         id_columns: List[str] = None,
         batch_size: Optional[int] = None,
     ):
-        """
-        Initialize predictor.
-
-        Args:
-            id_columns: Columns to include in output (e.g., investor_id, meeting_id)
-            batch_size: Process in batches for large datasets
-        """
-        self.id_columns = id_columns or [
-            "investor_id",
-            "pid",
-            "ProxySeason",
-            "meeting_id",
-        ]
+        self.id_columns = id_columns or CATEGORICAL_IDS
         self.batch_size = batch_size
 
-    def predict_supervised(
+    def predict_single_label_models(
         self,
         models: Dict[str, SupervisedRationaleModel],
         unlabeled_df: pd.DataFrame,
@@ -74,21 +51,17 @@ class Predictor:
         predictions_df = unlabeled_df[existing_ids].copy()
 
         print(f"\n{'=' * 80}")
-        print("GENERATING PREDICTIONS (Supervised/Semi-Supervised)")
+        print("GENERATING PREDICTIONS (separate models)")
         print(f"{'=' * 80}")
         print(f"Unlabeled samples: {len(unlabeled_df):,}")
         print(f"Rationales: {list(models.keys())}")
         print(f"{'=' * 80}\n")
 
-        # Predict for each rationale
         for rationale, model in models.items():
             print(f"Predicting {rationale}...", end=" ", flush=True)
 
             try:
-                # Prepare features
-                X, _, _ = data_manager.prepare_for_training(
-                    unlabeled_df, [rationale], fit=False
-                )
+                X, _, _ = data_manager.prepare_for_inference(unlabeled_df, [rationale])
 
                 # Predict
                 y_prob = model.predict_proba(X)
@@ -100,6 +73,36 @@ class Predictor:
                 print(f"✗ Error: {e}")
                 predictions_df[f"{rationale}_prob"] = np.nan
 
+        return predictions_df
+
+    def predict_multi_label_model(
+        self,
+        model,
+        unlabeled_df: pd.DataFrame,
+        data_manager: DataManager,
+        with_uncertainty: bool = False,
+    ) -> pd.DataFrame:
+        rationales = model.rationales
+        existing_ids = [c for c in self.id_columns if c in unlabeled_df.columns]
+        predictions_df = unlabeled_df[existing_ids].copy()
+
+        print(f"\n{'=' * 80}")
+        print("GENERATING PREDICTIONS (multi-label model)")
+        print(f"{'=' * 80}")
+        print(f"Unlabeled samples: {len(unlabeled_df):,}")
+        print(f"Rationales: {rationales}")
+        print(f"{'=' * 80}\n")
+
+        X, _, _ = data_manager.prepare_for_training(unlabeled_df, rationales, fit=False)
+
+        if with_uncertainty:
+            mean_probs = model.predict_proba_with_uncertainty(X)
+        else:
+            mean_probs = model.predict_proba(X)
+
+        for i, rationale in enumerate(rationales):
+            predictions_df[f"{rationale}_prob"] = mean_probs[:, i]
+            print(f"{rationale}: mean={mean_probs[:, i].mean():.3f}")
         return predictions_df
 
     def predict_mc_dropout(
@@ -216,7 +219,9 @@ class Predictor:
         models: Dict[str, BaseRationaleModel],
         unlabeled_df: pd.DataFrame,
         data_manager: DataManager,
-        **kwargs,
+        include_uncertainty: bool = False,
+        num_samples: int = 50,
+        **kwargs: Any,
     ) -> pd.DataFrame:
         """
         Generate predictions using any model type.
@@ -230,46 +235,38 @@ class Predictor:
         Returns:
             DataFrame with predictions
         """
+        # Single model: could be MC Dropout, BNN, or a single supervised/PCA model
+        if len(models) == 1:
+            first_model = next(iter(models.values()))
 
-        # Determine model type
-        first_model = next(iter(models.values()))
+            if isinstance(first_model, MCDropoutModel):
+                return self.predict_mc_dropout(
+                    model=first_model,
+                    unlabeled_df=unlabeled_df,
+                    data_manager=data_manager,
+                    include_uncertainty=include_uncertainty,
+                    num_samples=num_samples,
+                )
 
-        if isinstance(first_model, MCDropoutModel):
-            return self.predict_mc_dropout(
-                model=first_model,
-                unlabeled_df=unlabeled_df,
-                data_manager=data_manager,
-                **kwargs,
-            )
+            if isinstance(first_model, BNNModel):
+                return self.predict_bnn(
+                    model=first_model,
+                    unlabeled_df=unlabeled_df,
+                    data_manager=data_manager,
+                )
 
-        if isinstance(first_model, BNNModel):
-            return self.predict_bnn(
-                model=first_model,
-                unlabeled_df=unlabeled_df,
-                data_manager=data_manager,
-                **kwargs,
-            )
-
-        elif isinstance(first_model, SupervisedRationaleModel):
-            return self.predict_supervised(
+            return self.predict_single_label_models(
                 models=models,
                 unlabeled_df=unlabeled_df,
                 data_manager=data_manager,
             )
 
-        # Handle semi-supervised models (they inherit predict_proba from base supervised)
-        elif SEMI_SUPERVISED_AVAILABLE and (
-            isinstance(first_model, PseudoLabelingSemiSupervised)
-            or isinstance(first_model, CoTrainingSemiSupervised)
-        ):
-            return self.predict_supervised(
-                models=models,
-                unlabeled_df=unlabeled_df,
-                data_manager=data_manager,
-            )
-
-        else:
-            raise ValueError(f"Unknown model type: {type(first_model)}")
+        # Multiple entries: assume per‑rationale supervised-style models
+        return self.predict_single_label_models(
+            models=models,
+            unlabeled_df=unlabeled_df,
+            data_manager=data_manager,
+        )
 
     def analyze_predictions(
         self,
@@ -339,24 +336,33 @@ class Predictor:
 
             multi_label_stats = {
                 "total_observations": len(predictions_df),
-                "mean_rationales_per_obs": n_rationales_per_obs.mean(),
-                "median_rationales_per_obs": n_rationales_per_obs.median(),
             }
 
             for n in range(5):
+                confident_obs = (
+                    (
+                        (predictions_df[prob_cols] >= 0.7)
+                        | (predictions_df[prob_cols] <= 0.3)
+                    )
+                    .astype(int)
+                    .sum(axis=1)
+                )
                 count = (n_rationales_per_obs == n).sum()
                 pct = count / len(predictions_df) * 100
                 multi_label_stats[f"n_with_{n}_rationales"] = int(count)
                 multi_label_stats[f"pct_with_{n}_rationales"] = pct
+                multi_label_stats["confident_observations"] = (
+                    confident_obs.sum() / len(predictions_df) * 100
+                )
 
-            print(f"\nMulti-Label Distribution (threshold=0.5):")
-            print(
-                f"  Mean rationales per observation: {multi_label_stats['mean_rationales_per_obs']:.2f}"
-            )
+            print(f"\nMulti-Label Distribution:")
             for n in range(5):
                 count = multi_label_stats[f"n_with_{n}_rationales"]
                 pct = multi_label_stats[f"pct_with_{n}_rationales"]
-                print(f"  {n} rationales: {count:,} ({pct:.1f}%)")
+                conf_obs = multi_label_stats["confident_observations"]
+                print(
+                    f"  {n} rationales: {count:,} ({pct:.1f}%, confident: {conf_obs:.1f}%)"
+                )
 
         # Save if requested
         if output_dir:
@@ -365,6 +371,11 @@ class Predictor:
 
             confidence_df.to_csv(output_dir / "confidence_statistics.csv", index=False)
             print(f"\nStatistics saved to {output_dir}")
+
+        print("To visualize, run:")
+        print(
+            f"  python scripts/visualise_predictions.py --pred_dir predictions/[model_name]"
+        )
 
         return {
             "confidence": confidence_df,
