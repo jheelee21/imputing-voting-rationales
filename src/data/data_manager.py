@@ -238,6 +238,13 @@ class DataManager:
                     df[col].astype(str)
                 )
             else:
+                if col not in self.label_encoders:
+                    # Fallback when inference is run without a persisted DataManager.
+                    # This keeps prediction pipelines operational even if training
+                    # preprocessing artifacts were not saved alongside the model.
+                    self.label_encoders[col] = LabelEncoder()
+                    self.label_encoders[col].fit(df[col].astype(str))
+
                 le = self.label_encoders[col]
                 col_values = df[col].astype(str)
                 # Handle unseen categories
@@ -324,6 +331,16 @@ class DataManager:
             y: Label matrix (numpy array or None)
             feature_names: List of feature names
         """
+        missing_training_cols = not (
+            hasattr(self, "_training_numerical_cols")
+            and hasattr(self, "_training_categorical_cols")
+        )
+        if not fit and missing_training_cols and verbose:
+            print(
+                "Warning: training feature metadata not found; "
+                "using features from provided data."
+            )
+
         # Prepare features
         X_df = self.prepare_features(
             df,
@@ -377,11 +394,17 @@ class DataManager:
 
         # Scale numerical features (convert to values to avoid feature name issues)
         numerical_values = X_df[numerical_cols].values
-        X_scaled = (
-            self.scaler.fit_transform(numerical_values)
-            if fit
-            else self.scaler.transform(numerical_values)
-        )
+        if fit:
+            X_scaled = self.scaler.fit_transform(numerical_values)
+        else:
+            if hasattr(self.scaler, "mean_"):
+                X_scaled = self.scaler.transform(numerical_values)
+            else:
+                if verbose:
+                    print(
+                        "Warning: scaler not fitted; fitting scaler on provided data."
+                    )
+                X_scaled = self.scaler.fit_transform(numerical_values)
 
         # Combine features
         X = np.hstack([X_scaled, X_df[categorical_cols].values])
@@ -511,90 +534,61 @@ class DataManager:
                 "year": LabelEncoder(),
             }
 
+        def encode_index(values: np.ndarray, key: str, label: str) -> np.ndarray:
+            encoder = self._hierarchical_encoders[key]
+            has_classes = hasattr(encoder, "classes_")
+
+            if fit or not has_classes:
+                if not fit and verbose and not has_classes:
+                    print(
+                        f"Warning: hierarchical {label} encoder not found; "
+                        "fitting on provided data."
+                    )
+                encoded = encoder.fit_transform(values)
+                if verbose:
+                    print(f"Unique {label}s: {len(encoder.classes_)}")
+                return encoded
+
+            encoded = np.zeros(len(values), dtype=int)
+            known_values = set(encoder.classes_)
+
+            for i, value in enumerate(values):
+                if value in known_values:
+                    encoded[i] = encoder.transform([value])[0]
+                else:
+                    if key == "year" and len(known_values) > 0:
+                        closest_value = min(known_values, key=lambda x: abs(x - value))
+                        encoded[i] = encoder.transform([closest_value])[0]
+                        if verbose:
+                            print(
+                                f"Warning: Unseen {label} {value} mapped to closest value {closest_value}"
+                            )
+                    else:
+                        encoded[i] = 0
+                        if verbose:
+                            print(f"Warning: Unseen {label} {value} mapped to index 0")
+
+            return encoded
+
         # Extract and encode investor_id
         if "investor_id" not in df.columns:
             raise ValueError("Column 'investor_id' required for hierarchical model")
-
         investor_values = df["investor_id"].values
-        if fit:
-            investor_idx = self._hierarchical_encoders["investor"].fit_transform(
-                investor_values
-            )
-            if verbose:
-                print(
-                    f"Unique investors: {len(self._hierarchical_encoders['investor'].classes_)}"
-                )
-        else:
-            # Handle unseen investors during prediction
-            investor_idx = np.zeros(len(investor_values), dtype=int)
-            known_investors = set(self._hierarchical_encoders["investor"].classes_)
-            for i, inv in enumerate(investor_values):
-                if inv in known_investors:
-                    investor_idx[i] = self._hierarchical_encoders["investor"].transform(
-                        [inv]
-                    )[0]
-                else:
-                    # Assign to first investor (index 0) for unseen investors
-                    investor_idx[i] = 0
-                    if verbose:
-                        print(f"Warning: Unseen investor {inv} mapped to index 0")
+        investor_idx = encode_index(investor_values, "investor", "investor")
 
         # Extract and encode pid (firm)
         if "pid" not in df.columns:
             raise ValueError("Column 'pid' required for hierarchical model")
-
         firm_values = df["pid"].values
-        if fit:
-            firm_idx = self._hierarchical_encoders["firm"].fit_transform(firm_values)
-            if verbose:
-                print(
-                    f"Unique firms: {len(self._hierarchical_encoders['firm'].classes_)}"
-                )
-        else:
-            # Handle unseen firms during prediction
-            firm_idx = np.zeros(len(firm_values), dtype=int)
-            known_firms = set(self._hierarchical_encoders["firm"].classes_)
-            for i, firm in enumerate(firm_values):
-                if firm in known_firms:
-                    firm_idx[i] = self._hierarchical_encoders["firm"].transform([firm])[
-                        0
-                    ]
-                else:
-                    # Assign to first firm (index 0) for unseen firms
-                    firm_idx[i] = 0
-                    if verbose:
-                        print(f"Warning: Unseen firm {firm} mapped to index 0")
+        firm_idx = encode_index(firm_values, "firm", "firm")
 
         # Extract and encode ProxySeason (year)
         if "ProxySeason" not in df.columns:
             raise ValueError("Column 'ProxySeason' required for hierarchical model")
-
         year_values = df["ProxySeason"].values
-        if fit:
-            year_idx = self._hierarchical_encoders["year"].fit_transform(year_values)
-            if verbose:
-                print(
-                    f"Unique years: {len(self._hierarchical_encoders['year'].classes_)}"
-                )
-                print(f"Year range: {year_values.min()} - {year_values.max()}")
-        else:
-            # Handle unseen years during prediction
-            year_idx = np.zeros(len(year_values), dtype=int)
-            known_years = set(self._hierarchical_encoders["year"].classes_)
-            for i, year in enumerate(year_values):
-                if year in known_years:
-                    year_idx[i] = self._hierarchical_encoders["year"].transform([year])[
-                        0
-                    ]
-                else:
-                    # Assign to closest known year
-                    closest_year = min(known_years, key=lambda x: abs(x - year))
-                    year_idx[i] = self._hierarchical_encoders["year"].transform(
-                        [closest_year]
-                    )[0]
-                    if verbose:
-                        print(
-                            f"Warning: Unseen year {year} mapped to closest year {closest_year}"
-                        )
+        year_idx = encode_index(year_values, "year", "year")
+
+        if verbose and len(year_values) > 0:
+            print(f"Year range: {year_values.min()} - {year_values.max()}")
 
         return investor_idx, firm_idx, year_idx
