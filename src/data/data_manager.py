@@ -331,21 +331,15 @@ class DataManager:
             y: Label matrix (numpy array or None)
             feature_names: List of feature names
         """
-        needs_bootstrap_fit = (
-            not fit
-            and (
-                not hasattr(self, "_training_numerical_cols")
-                or not hasattr(self, "_training_categorical_cols")
-                or not hasattr(self.scaler, "mean_")
-            )
+        missing_training_cols = not (
+            hasattr(self, "_training_numerical_cols")
+            and hasattr(self, "_training_categorical_cols")
         )
-        if needs_bootstrap_fit:
-            fit = True
-            if verbose:
-                print(
-                    "Warning: preprocessing artifacts not found; "
-                    "fitting preprocessing on provided data."
-                )
+        if not fit and missing_training_cols and verbose:
+            print(
+                "Warning: training feature metadata not found; "
+                "using features from provided data."
+            )
 
         # Prepare features
         X_df = self.prepare_features(
@@ -400,11 +394,17 @@ class DataManager:
 
         # Scale numerical features (convert to values to avoid feature name issues)
         numerical_values = X_df[numerical_cols].values
-        X_scaled = (
-            self.scaler.fit_transform(numerical_values)
-            if fit
-            else self.scaler.transform(numerical_values)
-        )
+        if fit:
+            X_scaled = self.scaler.fit_transform(numerical_values)
+        else:
+            if hasattr(self.scaler, "mean_"):
+                X_scaled = self.scaler.transform(numerical_values)
+            else:
+                if verbose:
+                    print(
+                        "Warning: scaler not fitted; fitting scaler on provided data."
+                    )
+                X_scaled = self.scaler.fit_transform(numerical_values)
 
         # Combine features
         X = np.hstack([X_scaled, X_df[categorical_cols].values])
