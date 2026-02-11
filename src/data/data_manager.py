@@ -420,3 +420,181 @@ class DataManager:
             rationales=rationales,
             fit=False,
         )
+
+    def prepare_for_hierarchical(
+        self,
+        df: pd.DataFrame,
+        rationales: List[str],
+        additional_features: List[str] = [],
+        drop_high_missing: float = 1.0,
+        use_all_features: bool = False,
+        exclude_cols: List[str] = None,
+        missing_strategy: str = "zero",
+        fit: bool = True,
+        verbose: bool = False,
+    ) -> Tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        List[str],
+    ]:
+        """
+        Prepare data for hierarchical model with investor, firm, and year indices.
+
+        Args:
+            df: Input dataframe
+            rationales: Target rationales to predict
+            additional_features: Extra features to include
+            drop_high_missing: Drop features with missing rate > threshold
+            use_all_features: If True, use all available columns
+            exclude_cols: Columns to explicitly exclude
+            missing_strategy: Imputation strategy
+            fit: If True, fit encoders; if False, transform only
+            verbose: Print detailed information
+
+        Returns:
+            X: Feature matrix (numpy array)
+            y: Label matrix (numpy array or None)
+            investor_idx: Investor indices (numpy array)
+            firm_idx: Firm indices (numpy array)
+            year_idx: Year indices (numpy array)
+            feature_names: List of feature names
+        """
+
+        # First get regular features using existing method
+        X, y, feature_names = self.prepare_for_training(
+            df=df,
+            rationales=rationales,
+            additional_features=additional_features + ["investor_id"],
+            drop_high_missing=drop_high_missing,
+            use_all_features=use_all_features,
+            exclude_cols=exclude_cols,
+            missing_strategy=missing_strategy,
+            fit=fit,
+            verbose=verbose,
+        )
+
+        # Extract hierarchical indices
+        investor_idx, firm_idx, year_idx = self._extract_hierarchical_indices(
+            df, fit=fit, verbose=verbose
+        )
+
+        return X, y, investor_idx, firm_idx, year_idx, feature_names
+
+    def _extract_hierarchical_indices(
+        self,
+        df: pd.DataFrame,
+        fit: bool = True,
+        verbose: bool = False,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Extract and encode investor, firm, and year indices for hierarchical model.
+
+        Args:
+            df: Input dataframe with investor_id, pid, and ProxySeason columns
+            fit: If True, fit encoders; if False, transform only
+            verbose: Print detailed information
+
+        Returns:
+            investor_idx: Encoded investor indices
+            firm_idx: Encoded firm indices
+            year_idx: Encoded year indices
+        """
+        # Initialize encoders if not exists
+        if not hasattr(self, "_hierarchical_encoders"):
+            self._hierarchical_encoders = {
+                "investor": LabelEncoder(),
+                "firm": LabelEncoder(),
+                "year": LabelEncoder(),
+            }
+
+        # Extract and encode investor_id
+        if "investor_id" not in df.columns:
+            raise ValueError("Column 'investor_id' required for hierarchical model")
+
+        investor_values = df["investor_id"].values
+        if fit:
+            investor_idx = self._hierarchical_encoders["investor"].fit_transform(
+                investor_values
+            )
+            if verbose:
+                print(
+                    f"Unique investors: {len(self._hierarchical_encoders['investor'].classes_)}"
+                )
+        else:
+            # Handle unseen investors during prediction
+            investor_idx = np.zeros(len(investor_values), dtype=int)
+            known_investors = set(self._hierarchical_encoders["investor"].classes_)
+            for i, inv in enumerate(investor_values):
+                if inv in known_investors:
+                    investor_idx[i] = self._hierarchical_encoders["investor"].transform(
+                        [inv]
+                    )[0]
+                else:
+                    # Assign to first investor (index 0) for unseen investors
+                    investor_idx[i] = 0
+                    if verbose:
+                        print(f"Warning: Unseen investor {inv} mapped to index 0")
+
+        # Extract and encode pid (firm)
+        if "pid" not in df.columns:
+            raise ValueError("Column 'pid' required for hierarchical model")
+
+        firm_values = df["pid"].values
+        if fit:
+            firm_idx = self._hierarchical_encoders["firm"].fit_transform(firm_values)
+            if verbose:
+                print(
+                    f"Unique firms: {len(self._hierarchical_encoders['firm'].classes_)}"
+                )
+        else:
+            # Handle unseen firms during prediction
+            firm_idx = np.zeros(len(firm_values), dtype=int)
+            known_firms = set(self._hierarchical_encoders["firm"].classes_)
+            for i, firm in enumerate(firm_values):
+                if firm in known_firms:
+                    firm_idx[i] = self._hierarchical_encoders["firm"].transform([firm])[
+                        0
+                    ]
+                else:
+                    # Assign to first firm (index 0) for unseen firms
+                    firm_idx[i] = 0
+                    if verbose:
+                        print(f"Warning: Unseen firm {firm} mapped to index 0")
+
+        # Extract and encode ProxySeason (year)
+        if "ProxySeason" not in df.columns:
+            raise ValueError("Column 'ProxySeason' required for hierarchical model")
+
+        year_values = df["ProxySeason"].values
+        if fit:
+            year_idx = self._hierarchical_encoders["year"].fit_transform(year_values)
+            if verbose:
+                print(
+                    f"Unique years: {len(self._hierarchical_encoders['year'].classes_)}"
+                )
+                print(f"Year range: {year_values.min()} - {year_values.max()}")
+        else:
+            # Handle unseen years during prediction
+            year_idx = np.zeros(len(year_values), dtype=int)
+            known_years = set(self._hierarchical_encoders["year"].classes_)
+            for i, year in enumerate(year_values):
+                if year in known_years:
+                    year_idx[i] = self._hierarchical_encoders["year"].transform([year])[
+                        0
+                    ]
+                else:
+                    # Assign to closest known year
+                    closest_year = min(known_years, key=lambda x: abs(x - year))
+                    year_idx[i] = self._hierarchical_encoders["year"].transform(
+                        [closest_year]
+                    )[0]
+                    if verbose:
+                        print(
+                            f"Warning: Unseen year {year} mapped to closest year {closest_year}"
+                        )
+
+        return investor_idx, firm_idx, year_idx

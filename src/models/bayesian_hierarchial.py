@@ -21,6 +21,7 @@ from src.models.base_model import BaseRationaleModel
 # Pyro Hierarchical Logistic Module
 # ============================================================
 
+
 class BayesianHierarchicalLogistic(PyroModule):
     def __init__(
         self,
@@ -43,9 +44,7 @@ class BayesianHierarchicalLogistic(PyroModule):
         # Fixed Effects
         # -----------------------------
         self.beta = PyroSample(
-            dist.Normal(0.0, prior_scale)
-            .expand([output_dim, input_dim])
-            .to_event(2)
+            dist.Normal(0.0, prior_scale).expand([output_dim, input_dim]).to_event(2)
         )
 
         # -----------------------------
@@ -65,19 +64,14 @@ class BayesianHierarchicalLogistic(PyroModule):
         )
 
         self.gamma_firm = PyroSample(
-            dist.Normal(0.0, self.sigma_firm)
-            .expand([output_dim, n_firms])
-            .to_event(2)
+            dist.Normal(0.0, self.sigma_firm).expand([output_dim, n_firms]).to_event(2)
         )
 
         self.delta_year = PyroSample(
-            dist.Normal(0.0, self.sigma_year)
-            .expand([output_dim, n_years])
-            .to_event(2)
+            dist.Normal(0.0, self.sigma_year).expand([output_dim, n_years]).to_event(2)
         )
 
     def forward(self, x, investor_idx, firm_idx, year_idx, y=None):
-
         # Fixed effects
         logits_fixed = x @ self.beta.T  # (batch, output_dim)
 
@@ -102,8 +96,8 @@ class BayesianHierarchicalLogistic(PyroModule):
 # Main Model Wrapper (Consistent with BNNModel)
 # ============================================================
 
-class HierarchicalModel(BaseRationaleModel):
 
+class HierarchicalModel(BaseRationaleModel):
     def __init__(
         self,
         rationales: List[str],
@@ -161,7 +155,6 @@ class HierarchicalModel(BaseRationaleModel):
         year_val: Optional[np.ndarray] = None,
         verbose: bool = True,
     ):
-
         input_dim = X.shape[1]
         output_dim = y.shape[1]
 
@@ -182,9 +175,7 @@ class HierarchicalModel(BaseRationaleModel):
             poutine.block(self.model, hide=["obs"])
         )
 
-        optimizer = ClippedAdam(
-            {"lr": self.learning_rate, "clip_norm": self.grad_clip}
-        )
+        optimizer = ClippedAdam({"lr": self.learning_rate, "clip_norm": self.grad_clip})
 
         self.svi = SVI(
             self.model,
@@ -208,14 +199,11 @@ class HierarchicalModel(BaseRationaleModel):
         patience_counter = 0
 
         for epoch in range(self.num_epochs):
-
             epoch_loss = 0
             n_batches = 0
 
             for bx, by, bi, bf, byear in loader:
-                loss = (
-                    self.svi.step(bx, bi, bf, byear, by) / len(bx)
-                )
+                loss = self.svi.step(bx, bi, bf, byear, by) / len(bx)
                 epoch_loss += loss
                 n_batches += 1
 
@@ -224,8 +212,7 @@ class HierarchicalModel(BaseRationaleModel):
 
             if verbose and (epoch + 1) % 10 == 0:
                 print(
-                    f"Epoch {epoch+1}/{self.num_epochs}, "
-                    f"Loss: {avg_train_loss:.4f}"
+                    f"Epoch {epoch + 1}/{self.num_epochs}, Loss: {avg_train_loss:.4f}"
                 )
 
         self.is_fitted = True
@@ -243,7 +230,6 @@ class HierarchicalModel(BaseRationaleModel):
         year_idx: np.ndarray,
         num_samples: Optional[int] = None,
     ):
-
         if not self.is_fitted:
             raise RuntimeError("Model must be fitted first")
 
@@ -259,7 +245,6 @@ class HierarchicalModel(BaseRationaleModel):
 
         with torch.no_grad():
             for _ in range(num_samples):
-
                 guide_trace = pyro.poutine.trace(self.guide).get_trace(
                     X_t, inv_t, firm_t, year_t, None
                 )

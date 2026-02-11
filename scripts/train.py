@@ -30,6 +30,7 @@ EXTENDED_MODEL_TYPES = [
     "sparse_gp",
     "deep_kernel_gp",
     "pca",
+    "hierarchical",
 ]
 ALL_MODEL_TYPES = ORIGINAL_MODEL_TYPES + EXTENDED_MODEL_TYPES
 
@@ -361,6 +362,9 @@ def main():
     print(f"Models saved to: models/{args.model_type}")
     print(f"\nTo evaluate, run:")
     print(f"  python scripts/evaluate.py --model_dir models/{args.model_type}")
+    print()
+    print(f"To generate predictions, run:")
+    print(f"  python scripts/predict.py --model_dir models/{args.model_type}")
 
     if args.model_type == "pca":
         print(f"\nPCA models trained successfully!")

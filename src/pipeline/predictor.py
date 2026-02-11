@@ -17,6 +17,14 @@ from src.models.gaussian_process import GPModel
 from configs.config import CATEGORICAL_IDS
 
 try:
+    from src.models.bayesian_hierarchial import HierarchicalModel
+
+    HIERARCHICAL_AVAILABLE = True
+except ImportError:
+    HIERARCHICAL_AVAILABLE = False
+
+
+try:
     from src.models.gaussian_process import GPModel
 
     GP_AVAILABLE = True
@@ -296,7 +304,165 @@ class Predictor:
 
         return predictions_df
 
+    def predict_hierarchical(
+        self,
+        model: HierarchicalModel,
+        unlabeled_df: pd.DataFrame,
+        data_manager: DataManager,
+        num_samples: Optional[int] = None,
+        include_uncertainty: bool = False,
+        **kwargs,
+    ) -> pd.DataFrame:
+        """
+        Generate predictions using Hierarchical Bayesian model.
+
+        Args:
+            model: Trained HierarchicalModel
+            unlabeled_df: Dataframe with unlabeled observations
+            data_manager: DataManager instance
+            num_samples: Number of posterior samples (default: use model's num_samples)
+            include_uncertainty: Whether to compute epistemic uncertainty (not yet implemented)
+
+        Returns:
+            DataFrame with predictions
+        """
+        if not HIERARCHICAL_AVAILABLE:
+            raise ImportError("Hierarchical model not available")
+
+        rationales = model.rationales
+
+        # Start with ID columns
+        existing_ids = [c for c in self.id_columns if c in unlabeled_df.columns]
+        predictions_df = unlabeled_df[existing_ids].copy()
+
+        print(f"\n{'=' * 80}")
+        print("GENERATING PREDICTIONS (Hierarchical Bayesian)")
+        print(f"{'=' * 80}")
+        print(f"Unlabeled samples: {len(unlabeled_df):,}")
+        print(f"Rationales: {rationales}")
+        print(f"MC samples: {num_samples or model.num_samples}")
+        print(f"{'=' * 80}\n")
+
+        # Prepare features with hierarchical indices
+        X, _, inv_idx, firm_idx, year_idx, _ = data_manager.prepare_for_hierarchical(
+            unlabeled_df,
+            rationales,
+            fit=False,  # Use fitted encoders from training
+        )
+
+        print(f"Feature shape: {X.shape}")
+        print(f"Unique investors: {np.unique(inv_idx).size}")
+        print(f"Unique firms: {np.unique(firm_idx).size}")
+        print(f"Unique years: {np.unique(year_idx).size}\n")
+
+        # Get predictions
+        mean_probs = model.predict_proba(
+            X=X,
+            investor_idx=inv_idx,
+            firm_idx=firm_idx,
+            year_idx=year_idx,
+            num_samples=num_samples,
+        )
+
+        # Add probabilities
+        for i, rationale in enumerate(rationales):
+            predictions_df[f"{rationale}_prob"] = mean_probs[:, i]
+            print(
+                f"{rationale}: mean={mean_probs[:, i].mean():.3f}, "
+                f"std={mean_probs[:, i].std():.3f}, "
+                f"min={mean_probs[:, i].min():.3f}, "
+                f"max={mean_probs[:, i].max():.3f}"
+            )
+
+        # TODO: Add uncertainty quantification
+        # For now, we only return mean predictions
+        # Future: Can extract epistemic uncertainty from posterior samples
+        if include_uncertainty:
+            print(
+                "\nNote: Uncertainty quantification not yet implemented for hierarchical model"
+            )
+
+        return predictions_df
+
     def predict(
+        self,
+        models: Dict[str, Any],
+        unlabeled_df: pd.DataFrame,
+        data_manager: DataManager,
+        include_uncertainty: bool = False,
+        num_samples: int = 50,
+    ) -> pd.DataFrame:
+        """
+        Generate predictions using any model type (including hierarchical).
+
+        This is an updated version of predict that supports the hierarchical model.
+        You can either replace your existing predict method or keep both.
+
+        Args:
+            models: Dict of trained models
+            unlabeled_df: Dataframe with unlabeled observations
+            data_manager: DataManager instance
+            include_uncertainty: Whether to include uncertainty estimates
+            num_samples: Number of MC samples for uncertainty estimation
+
+        Returns:
+            DataFrame with predictions
+        """
+        # Detect model type
+        if len(models) == 1:
+            model_key = list(models.keys())[0]
+            model = models[model_key]
+
+            # Check if it's a hierarchical model
+            if HIERARCHICAL_AVAILABLE and isinstance(model, HierarchicalModel):
+                return self.predict_hierarchical(
+                    model=model,
+                    unlabeled_df=unlabeled_df,
+                    data_manager=data_manager,
+                    num_samples=num_samples,
+                    include_uncertainty=include_uncertainty,
+                )
+
+            # Check if it's a BNN model
+            elif hasattr(model, "__class__") and "BNNModel" in model.__class__.__name__:
+                return self.predict_bnn(
+                    model=model,
+                    unlabeled_df=unlabeled_df,
+                    data_manager=data_manager,
+                    include_uncertainty=include_uncertainty,
+                    num_samples=num_samples,
+                )
+
+            # Check if it's an MC Dropout model
+            elif (
+                hasattr(model, "__class__")
+                and "MCDropoutModel" in model.__class__.__name__
+            ):
+                return self.predict_mc_dropout(
+                    model=model,
+                    unlabeled_df=unlabeled_df,
+                    data_manager=data_manager,
+                    include_uncertainty=include_uncertainty,
+                    num_samples=num_samples,
+                )
+
+            # Check if it's a GP model
+            elif hasattr(model, "__class__") and "GPModel" in model.__class__.__name__:
+                return self.predict_gp(
+                    model=model,
+                    unlabeled_df=unlabeled_df,
+                    data_manager=data_manager,
+                    include_uncertainty=include_uncertainty,
+                )
+
+        # Default: single-label models (one per rationale)
+        return self.predict_single_label_models(
+            models=models,
+            unlabeled_df=unlabeled_df,
+            data_manager=data_manager,
+        )
+
+    def _predict(
         self,
         models: Dict[str, BaseRationaleModel],
         unlabeled_df: pd.DataFrame,

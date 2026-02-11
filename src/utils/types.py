@@ -11,3 +11,4 @@ class ModelType(Enum):
     SEMI_SUPERVISED = "semi_supervised"
     GAUSSIAN_PROCESS = "gaussian_process"
     PCA = "pca"
+    BAYESIAN_HIERARCHICAL = "bayesian_hierarchical"
