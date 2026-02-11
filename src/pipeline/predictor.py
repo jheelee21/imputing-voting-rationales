@@ -377,6 +377,32 @@ class Predictor:
                 "Ensure the training DataManager artifacts or model feature_names are available."
             )
 
+        # Guard against out-of-range hierarchical indices when inference encoders
+        # are bootstrapped from prediction data rather than training artifacts.
+        expected_investors = getattr(getattr(model, "model", None), "n_investors", None)
+        expected_firms = getattr(getattr(model, "model", None), "n_firms", None)
+        expected_years = getattr(getattr(model, "model", None), "n_years", None)
+
+        def remap_oob(
+            indices: np.ndarray, upper_bound: Optional[int], label: str
+        ) -> np.ndarray:
+            if upper_bound is None:
+                return indices
+            oob_mask = (indices < 0) | (indices >= upper_bound)
+            if np.any(oob_mask):
+                print(
+                    f"Warning: {oob_mask.sum():,} {label} indices out of bounds for trained model "
+                    f"(size={upper_bound}); remapping to 0."
+                )
+                fixed = indices.copy()
+                fixed[oob_mask] = 0
+                return fixed
+            return indices
+
+        inv_idx = remap_oob(inv_idx, expected_investors, "investor")
+        firm_idx = remap_oob(firm_idx, expected_firms, "firm")
+        year_idx = remap_oob(year_idx, expected_years, "year")
+
         # Get predictions
         mean_probs = model.predict_proba(
             X=X,
@@ -653,7 +679,7 @@ class Predictor:
 
         print("To visualize, run:")
         print(
-            f"  python scripts/visualise_predictions.py --pred_dir predictions/[model_name]"
+            f"  python scripts/visualise_predictions.py --pred_dir predictions/{output_dir.split('/')[-1]}"
         )
 
         return {
