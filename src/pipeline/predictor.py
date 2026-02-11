@@ -13,6 +13,9 @@ from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 from src.models.bnn_model import BNNModel
+from src.models.gaussian_process import GPModel
+from configs.config import CATEGORICAL_IDS
+
 try:
     from src.models.gaussian_process import GPModel
 
@@ -235,7 +238,7 @@ class Predictor:
 
     def predict_gp(
         self,
-        models: Dict[str, "GPModel"],
+        models: Dict[str, GPModel],
         unlabeled_df: pd.DataFrame,
         data_manager: DataManager,
         include_uncertainty: bool = False,
@@ -293,7 +296,6 @@ class Predictor:
 
         return predictions_df
 
-
     def predict(
         self,
         models: Dict[str, BaseRationaleModel],
@@ -335,7 +337,7 @@ class Predictor:
                     data_manager=data_manager,
                 )
 
-        elif GP_AVAILABLE and isinstance(first_model, GPModel):
+        elif GP_AVAILABLE:
             return self.predict_gp(
                 models=models,
                 unlabeled_df=unlabeled_df,
