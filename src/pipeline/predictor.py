@@ -13,6 +13,14 @@ from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 from src.models.bnn_model import BNNModel
 
+try:
+    from src.models.gaussian_process import GPModel
+
+    GP_AVAILABLE = True
+except ImportError:
+    GPModel = None
+    GP_AVAILABLE = False
+
 # Import semi-supervised models if available
 try:
     from src.models.semi_supervised import (
@@ -211,6 +219,67 @@ class Predictor:
 
         return predictions_df
 
+    def predict_gp(
+        self,
+        models: Dict[str, "GPModel"],
+        unlabeled_df: pd.DataFrame,
+        data_manager: DataManager,
+        include_uncertainty: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Generate predictions using per-rationale Gaussian Process models.
+
+        Args:
+            models: Dict of {rationale: GPModel}
+            unlabeled_df: Dataframe with unlabeled observations
+            data_manager: DataManager instance
+            include_uncertainty: Whether to include GP predictive std
+
+        Returns:
+            DataFrame with probabilities (and optional predictive std columns)
+        """
+
+        existing_ids = [c for c in self.id_columns if c in unlabeled_df.columns]
+        predictions_df = unlabeled_df[existing_ids].copy()
+
+        print(f"\n{'=' * 80}")
+        print("GENERATING PREDICTIONS (Gaussian Process)")
+        print(f"{'=' * 80}")
+        print(f"Unlabeled samples: {len(unlabeled_df):,}")
+        print(f"Rationales: {list(models.keys())}")
+        print(f"Include uncertainty: {include_uncertainty}")
+        print(f"{'=' * 80}\n")
+
+        for rationale, model in models.items():
+            print(f"Predicting {rationale}...", end=" ", flush=True)
+
+            try:
+                X, _, _ = data_manager.prepare_for_training(
+                    unlabeled_df, [rationale], fit=False
+                )
+
+                if include_uncertainty:
+                    y_prob, y_std = model.predict_with_uncertainty(X)
+                    predictions_df[f"{rationale}_prob"] = y_prob
+                    predictions_df[f"{rationale}_pred_std"] = y_std
+                    print(
+                        f"✓ (mean: {y_prob.mean():.3f}, std: {y_prob.std():.3f}, "
+                        f"pred_std_mean: {y_std.mean():.3f})"
+                    )
+                else:
+                    y_prob = model.predict_proba(X)
+                    predictions_df[f"{rationale}_prob"] = y_prob
+                    print(f"✓ (mean: {y_prob.mean():.3f}, std: {y_prob.std():.3f})")
+
+            except Exception as e:
+                print(f"✗ Error: {e}")
+                predictions_df[f"{rationale}_prob"] = np.nan
+                if include_uncertainty:
+                    predictions_df[f"{rationale}_pred_std"] = np.nan
+
+        return predictions_df
+
+
     def predict(
         self,
         models: Dict[str, BaseRationaleModel],
@@ -248,6 +317,14 @@ class Predictor:
                 unlabeled_df=unlabeled_df,
                 data_manager=data_manager,
                 **kwargs,
+            )
+
+        elif GP_AVAILABLE and isinstance(first_model, GPModel):
+            return self.predict_gp(
+                models=models,
+                unlabeled_df=unlabeled_df,
+                data_manager=data_manager,
+                include_uncertainty=kwargs.get("include_uncertainty", False),
             )
 
         elif isinstance(first_model, SupervisedRationaleModel):

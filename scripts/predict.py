@@ -21,6 +21,98 @@ from src.models.base_model import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.models.bnn_model import BNNModel
 
+try:
+    from gpytorch.likelihoods import BernoulliLikelihood
+    from src.models.gaussian_process import (
+        GPModel,
+        VariationalGPClassifier,
+        DeepKernelGPClassifier,
+    )
+
+    GP_AVAILABLE = True
+except ImportError:
+    GP_AVAILABLE = False
+
+
+def _load_gp_model(model_path: Path):
+    """
+    Robust GP loader.
+
+    Supports both:
+    1) Pickled GPModel object
+    2) GP metadata checkpoint dict saved by GPModel.save(...)
+    """
+    if not GP_AVAILABLE:
+        raise ImportError("GP dependencies unavailable")
+
+    with open(model_path, "rb") as f:
+        payload = pickle.load(f)
+
+    # Case 1: already a serialized model object
+    if isinstance(payload, GPModel):
+        return payload
+
+    # Case 2: metadata + state dict checkpoint
+    required_keys = {
+        "rationale",
+        "gp_model_type",
+        "kernel_type",
+        "model_state",
+        "likelihood_state",
+    }
+    if not isinstance(payload, dict) or not required_keys.issubset(payload.keys()):
+        raise ValueError("Not a GP checkpoint payload")
+
+    hyper = payload.get("hyperparameters", {})
+
+    model = GPModel(
+        rationale=payload["rationale"],
+        model_type=payload["gp_model_type"],
+        kernel_type=payload.get("kernel_type", "rbf"),
+        num_inducing=hyper.get("num_inducing", 500),
+        learning_rate=hyper.get("learning_rate", 0.01),
+        num_epochs=hyper.get("num_epochs", 100),
+        batch_size=hyper.get("batch_size", 256),
+        hidden_dims=hyper.get("hidden_dims", [64, 32]),
+        use_ard=hyper.get("use_ard", True),
+        random_seed=hyper.get("random_seed", 21),
+    )
+
+    model.feature_names = payload.get("feature_names")
+    model.training_losses = payload.get("training_losses", [])
+
+    model_state = payload["model_state"]
+    likelihood_state = payload["likelihood_state"]
+
+    inducing_points = model_state.get("variational_strategy.inducing_points")
+    if inducing_points is None:
+        raise ValueError("GP checkpoint missing inducing points")
+    inducing_points = inducing_points.to(model.device)
+
+    if model.gp_model_type == "sparse_gp":
+        ard_dims = inducing_points.shape[1] if model.use_ard else None
+        model.model = VariationalGPClassifier(
+            inducing_points=inducing_points,
+            kernel_type=model.kernel_type,
+            ard_dims=ard_dims,
+        ).to(model.device)
+    elif model.gp_model_type == "deep_kernel":
+        model.model = DeepKernelGPClassifier(
+            input_dim=inducing_points.shape[1],
+            inducing_points=inducing_points,
+            hidden_dims=model.hidden_dims,
+            kernel_type=model.kernel_type,
+        ).to(model.device)
+    else:
+        raise ValueError(f"Unknown GP model type: {model.gp_model_type}")
+
+    model.likelihood = BernoulliLikelihood().to(model.device)
+    model.model.load_state_dict(model_state)
+    model.likelihood.load_state_dict(likelihood_state)
+    model.is_fitted = True
+
+    return model
+
 
 def load_models(model_dir: Path):
     """Load all models from directory."""
@@ -38,11 +130,29 @@ def load_models(model_dir: Path):
         models["bnn"] = BNNModel.load(str(bnn_path))
         return models
 
-    # Load supervised models
-    for model_path in model_dir.glob("*_model.pkl"):
-        if model_path.stem != "mc_dropout_model":
-            rationale = model_path.stem.replace("_model", "")
+    # Load per-rationale models (supervised / boosting / GP)
+    for model_path in sorted(model_dir.glob("*_model.pkl")):
+        if model_path.stem in {"mc_dropout_model", "bnn_model"}:
+            continue
+
+        rationale = model_path.stem.replace("_model", "")
+
+        gp_error = None
+        if GP_AVAILABLE:
+            try:
+                gp_model = _load_gp_model(model_path)
+                models[gp_model.rationale] = gp_model
+                continue
+            except Exception as e:
+                gp_error = e
+
+        try:
             models[rationale] = SupervisedRationaleModel.load(str(model_path))
+        except Exception as supervised_error:
+            print(
+                f"Warning: Could not load {model_path.name} as GP "
+                f"({gp_error}) or supervised model ({supervised_error})."
+            )
 
     return models
 
