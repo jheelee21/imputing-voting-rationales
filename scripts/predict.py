@@ -257,7 +257,14 @@ def main():
     if data_manager_path.exists():
         with open(data_manager_path, "rb") as f:
             data_manager = pickle.load(f)
-        print("Loaded data manager from training")
+        if isinstance(data_manager, DataManager):
+            print("Loaded data manager from training")
+        else:
+            print(
+                "Warning: data_manager.pkl did not contain a valid DataManager; "
+                "creating a new DataManager."
+            )
+            data_manager = DataManager()
     else:
         print("Creating new data manager")
         data_manager = DataManager()

@@ -56,6 +56,45 @@ class Predictor:
         self.id_columns = id_columns or CATEGORICAL_IDS
         self.batch_size = batch_size
 
+    @staticmethod
+    def _align_features_to_model(
+        X: np.ndarray,
+        current_feature_names: List[str],
+        expected_feature_names: Optional[List[str]],
+    ) -> np.ndarray:
+        """Align feature matrix columns to a model's expected feature order."""
+        if not expected_feature_names:
+            return X
+
+        if list(current_feature_names) == list(expected_feature_names):
+            return X
+
+        name_to_idx = {name: idx for idx, name in enumerate(current_feature_names)}
+        aligned = np.zeros((X.shape[0], len(expected_feature_names)), dtype=float)
+
+        missing = []
+        for j, name in enumerate(expected_feature_names):
+            idx = name_to_idx.get(name)
+            if idx is None:
+                missing.append(name)
+                continue
+            aligned[:, j] = X[:, idx]
+
+        if missing:
+            print(
+                f"Warning: {len(missing)} expected features missing at inference; "
+                "filled with zeros. Example: "
+                f"{missing[:5]}"
+            )
+
+        extra = set(current_feature_names) - set(expected_feature_names)
+        if extra:
+            print(
+                f"Note: Dropping {len(extra)} extra inference features not used by model."
+            )
+
+        return aligned
+
     def predict_single_label_models(
         self,
         models: Dict[str, SupervisedRationaleModel],
@@ -90,7 +129,14 @@ class Predictor:
             print(f"Predicting {rationale}...", end=" ", flush=True)
 
             try:
-                X, _, _ = data_manager.prepare_for_inference(unlabeled_df, [rationale])
+                X, _, feature_names = data_manager.prepare_for_inference(
+                    unlabeled_df, [rationale]
+                )
+                X = self._align_features_to_model(
+                    X,
+                    feature_names,
+                    getattr(model, "feature_names", None),
+                )
 
                 # Predict
                 y_prob = model.predict_proba(X)
