@@ -271,7 +271,6 @@ def main():
     )
     load_and_filter_data(data_manager, workflow)
 
-
     # Get rationales from models
     first_model = next(iter(models.values()))
 

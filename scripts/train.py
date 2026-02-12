@@ -33,7 +33,6 @@ ALL_MODEL_TYPES = get_trainable_model_types()
 EXTENDED_MODEL_TYPES = get_extended_model_types()
 
 
-
 def main():
     parser = argparse.ArgumentParser(
         description="Train voting rationale prediction models (original + extended + PCA)",

@@ -51,9 +51,7 @@ class DataManager:
 
         # Soft validation for rationale-linked required features.
         rationale_feature_map = {
-            r: fset
-            for r, fset in REQUIRED_FEATURES.items()
-            if r in self.df.columns
+            r: fset for r, fset in REQUIRED_FEATURES.items() if r in self.df.columns
         }
         missing_rationale_features = {
             r: [f for f in fset if f not in self.df.columns]

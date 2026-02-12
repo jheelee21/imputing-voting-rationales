@@ -562,9 +562,7 @@ class Predictor:
                     data_manager=data_manager,
                 )
 
-        elif GP_AVAILABLE and all(
-            isinstance(m, GPModel) for m in models.values()
-        ):
+        elif GP_AVAILABLE and all(isinstance(m, GPModel) for m in models.values()):
             return self.predict_gp(
                 models=models,
                 unlabeled_df=unlabeled_df,
@@ -692,7 +690,7 @@ class Predictor:
 
         print("To visualize, run:")
         print(
-            f"  python scripts/visualise_predictions.py --pred_dir predictions/{output_dir.split('/')[-1]}"
+            f"  python scripts/visualise_predictions.py --pred_dir predictions/{output_dir.name}"
         )
 
         return {

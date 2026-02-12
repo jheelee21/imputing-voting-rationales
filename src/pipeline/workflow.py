@@ -73,11 +73,14 @@ def build_feature_config(
         "exclude_cols": list(exclude_cols)
         if exclude_cols is not None
         else FEATURE_CONFIG.get("exclude_cols"),
-        "missing_strategy": missing_strategy or FEATURE_CONFIG.get("missing_strategy", "median"),
+        "missing_strategy": missing_strategy
+        or FEATURE_CONFIG.get("missing_strategy", "median"),
     }
 
 
-def resolve_save_dir(default_root: Path, model_type: str, save_dir: Optional[str]) -> Path:
+def resolve_save_dir(
+    default_root: Path, model_type: str, save_dir: Optional[str]
+) -> Path:
     """Resolve and create model output directory."""
     path = Path(save_dir) if save_dir else default_root / model_type
     path.mkdir(parents=True, exist_ok=True)
