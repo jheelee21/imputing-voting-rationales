@@ -35,8 +35,38 @@ class DataManager:
     def load_data(self, filepath: str) -> pd.DataFrame:
         """Load data from CSV file."""
         self.df = pd.read_csv(filepath)
+        self.validate_schema()
         print(f"Loaded {len(self.df):,} records from {filepath}")
         return self.df
+
+    def validate_schema(self) -> None:
+        """Validate key columns required by training/prediction workflows."""
+        if self.df is None:
+            raise ValueError("Data not loaded")
+
+        required_cols = {"ind_dissent", "N_Meetings_Rat", "N_dissent"}
+        missing = sorted(required_cols - set(self.df.columns))
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
+
+        # Soft validation for rationale-linked required features.
+        rationale_feature_map = {
+            r: fset
+            for r, fset in REQUIRED_FEATURES.items()
+            if r in self.df.columns
+        }
+        missing_rationale_features = {
+            r: [f for f in fset if f not in self.df.columns]
+            for r, fset in rationale_feature_map.items()
+        }
+        missing_rationale_features = {
+            r: cols for r, cols in missing_rationale_features.items() if cols
+        }
+        if missing_rationale_features:
+            print(
+                "Warning: Missing rationale-linked features detected "
+                f"(targets can still run if excluded): {missing_rationale_features}"
+            )
 
     def apply_filters(
         self, min_meetings_rat: int = 1, min_dissent: int = 5
