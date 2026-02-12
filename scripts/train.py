@@ -20,6 +20,7 @@ from src.pipeline.workflow import (
     resolve_save_dir,
     split_labeled_data,
 )
+from src.utils.types import get_extended_model_types, get_trainable_model_types
 
 try:
     from src.pipeline.extended_trainer import ExtendedModelTrainer
@@ -28,18 +29,9 @@ try:
 except ImportError:
     EXTENDED_AVAILABLE = False
 
-ORIGINAL_MODEL_TYPES = ["logistic", "random_forest", "gradient_boosting", "mc_dropout"]
-EXTENDED_MODEL_TYPES = [
-    "bnn",
-    "catboost",
-    "lightgbm",
-    "xgboost",
-    "sparse_gp",
-    "deep_kernel_gp",
-    "pca",
-    "hierarchical",
-]
-ALL_MODEL_TYPES = ORIGINAL_MODEL_TYPES + EXTENDED_MODEL_TYPES
+ALL_MODEL_TYPES = get_trainable_model_types()
+EXTENDED_MODEL_TYPES = get_extended_model_types()
+
 
 
 def main():
