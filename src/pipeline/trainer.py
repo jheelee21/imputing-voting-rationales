@@ -211,23 +211,25 @@ class ModelTrainer:
                     json.dump(self.training_info, f, indent=2)
 
         else:
+            if save_dir is not None:
+                save_dir = Path(save_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+
             for rationale in rationales:
                 model = self.train_supervised(train_df, rationale, data_manager)
 
                 if model is not None:
                     self.models[rationale] = model
-
-                    save_dir = Path(save_dir)
-                    save_dir.mkdir(parents=True, exist_ok=True)
-
-                    model.save(str(save_dir / f"{rationale}_model.pkl"))
+                    if save_dir is not None:
+                        model.save(str(save_dir / f"{rationale}_model.pkl"))
 
             # Save data manager and training info
-            with open(save_dir / "data_manager.pkl", "wb") as f:
-                pickle.dump(data_manager, f)
+            if save_dir is not None:
+                with open(save_dir / "data_manager.pkl", "wb") as f:
+                    pickle.dump(data_manager, f)
 
-            with open(save_dir / "training_info.json", "w") as f:
-                json.dump(self.training_info, f, indent=2)
+                with open(save_dir / "training_info.json", "w") as f:
+                    json.dump(self.training_info, f, indent=2)
 
         # Print summary
         self._print_training_summary()

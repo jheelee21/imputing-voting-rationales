@@ -13,7 +13,6 @@ from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 from src.models.bnn_model import BNNModel
-from src.models.gaussian_process import GPModel
 from configs.config import CATEGORICAL_IDS
 
 try:
@@ -497,11 +496,23 @@ class Predictor:
             # Check if it's a GP model
             elif hasattr(model, "__class__") and "GPModel" in model.__class__.__name__:
                 return self.predict_gp(
-                    model=model,
+                    models={model_key: model},
                     unlabeled_df=unlabeled_df,
                     data_manager=data_manager,
                     include_uncertainty=include_uncertainty,
                 )
+
+        # Multi-rationale GP models
+        if all(
+            hasattr(m, "__class__") and "GPModel" in m.__class__.__name__
+            for m in models.values()
+        ):
+            return self.predict_gp(
+                models=models,
+                unlabeled_df=unlabeled_df,
+                data_manager=data_manager,
+                include_uncertainty=include_uncertainty,
+            )
 
         # Default: single-label models (one per rationale)
         return self.predict_single_label_models(
@@ -551,7 +562,7 @@ class Predictor:
                     data_manager=data_manager,
                 )
 
-        elif GP_AVAILABLE:
+        elif GP_AVAILABLE and all(isinstance(m, GPModel) for m in models.values()):
             return self.predict_gp(
                 models=models,
                 unlabeled_df=unlabeled_df,
@@ -559,7 +570,7 @@ class Predictor:
                 include_uncertainty=kwargs.get("include_uncertainty", False),
             )
 
-        elif isinstance(first_model, SupervisedRationaleModel):
+        if len(models) == 1 and isinstance(first_model, SupervisedRationaleModel):
             return self.predict_supervised(
                 models=models,
                 unlabeled_df=unlabeled_df,
@@ -679,7 +690,7 @@ class Predictor:
 
         print("To visualize, run:")
         print(
-            f"  python scripts/visualise_predictions.py --pred_dir predictions/{output_dir.split('/')[-1]}"
+            f"  python scripts/visualise_predictions.py --pred_dir predictions/{output_dir.name}"
         )
 
         return {

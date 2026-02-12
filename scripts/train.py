@@ -3,16 +3,24 @@ import argparse
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from configs.config import (
     DATA_CONFIG,
     MODELS_DIR,
     CORE_RATIONALES,
     MODEL_CONFIGS,
-    FEATURE_CONFIG,
 )
 from src.data.data_manager import DataManager
 from src.pipeline.trainer import ModelTrainer
-from src.utils.types import ModelType
+from src.pipeline.workflow import (
+    WorkflowConfig,
+    build_feature_config,
+    load_and_filter_data,
+    resolve_save_dir,
+    split_labeled_data,
+)
+from src.utils.types import get_extended_model_types, get_trainable_model_types
 
 try:
     from src.pipeline.extended_trainer import ExtendedModelTrainer
@@ -21,18 +29,8 @@ try:
 except ImportError:
     EXTENDED_AVAILABLE = False
 
-ORIGINAL_MODEL_TYPES = ["logistic", "random_forest", "gradient_boosting", "mc_dropout"]
-EXTENDED_MODEL_TYPES = [
-    "bnn",
-    "catboost",
-    "lightgbm",
-    "xgboost",
-    "sparse_gp",
-    "deep_kernel_gp",
-    "pca",
-    "hierarchical",
-]
-ALL_MODEL_TYPES = ORIGINAL_MODEL_TYPES + EXTENDED_MODEL_TYPES
+ALL_MODEL_TYPES = get_trainable_model_types()
+EXTENDED_MODEL_TYPES = get_extended_model_types()
 
 
 def main():
@@ -193,13 +191,16 @@ def main():
             f"Extended model '{args.model_type}' requires ExtendedModelTrainer. Install optional dependencies."
         )
 
-    # Determine save directory
-    if args.save_dir:
-        save_dir = Path(args.save_dir)
-    else:
-        save_dir = MODELS_DIR / args.model_type
+    workflow = WorkflowConfig(
+        data_path=args.data_path,
+        min_meetings_rat=args.min_meetings_rat,
+        min_dissent=args.min_dissent,
+        random_seed=args.random_seed,
+        test_size=args.test_size,
+    )
 
-    save_dir.mkdir(parents=True, exist_ok=True)
+    # Determine save directory
+    save_dir = resolve_save_dir(MODELS_DIR, args.model_type, args.save_dir)
 
     # Print configuration
     print("=" * 80)
@@ -224,15 +225,12 @@ def main():
     # Load and prepare data
     print("Loading data...")
     data_manager = DataManager()
-    data_manager.load_data(args.data_path)
-    data_manager.apply_filters(
-        min_meetings_rat=args.min_meetings_rat, min_dissent=args.min_dissent
-    )
+    load_and_filter_data(data_manager, workflow)
 
-    train_df, val_df = data_manager.split_data(
-        test_size=args.test_size,
-        random_seed=args.random_seed,
+    train_df, val_df = split_labeled_data(
+        data_manager=data_manager,
         rationales=args.rationales,
+        workflow=workflow,
     )
 
     use_extended = args.model_type in EXTENDED_MODEL_TYPES
@@ -241,14 +239,11 @@ def main():
         # Config for extended trainer (default: all variables with missing rate < threshold)
         config = {
             "random_seed": args.random_seed,
-            "use_all_features": not args.required_only,
-            "drop_high_missing": args.drop_high_missing
-            if args.drop_high_missing is not None
-            else FEATURE_CONFIG.get("drop_high_missing", 0.5),
-            "exclude_cols": args.exclude_cols
-            if args.exclude_cols is not None
-            else FEATURE_CONFIG.get("exclude_cols"),
-            "missing_strategy": FEATURE_CONFIG.get("missing_strategy", "median"),
+            **build_feature_config(
+                required_only=args.required_only,
+                drop_high_missing=args.drop_high_missing,
+                exclude_cols=args.exclude_cols,
+            ),
         }
 
         # PCA-specific configuration
@@ -314,18 +309,13 @@ def main():
         config = MODEL_CONFIGS.get(args.model_type, {}).copy()
         config["calibrate"] = not args.no_calibrate
         config["random_seed"] = args.random_seed
-        config["use_all_features"] = not args.required_only
-        config["drop_high_missing"] = (
-            args.drop_high_missing
-            if args.drop_high_missing is not None
-            else FEATURE_CONFIG.get("drop_high_missing", 0.5)
+        config.update(
+            build_feature_config(
+                required_only=args.required_only,
+                drop_high_missing=args.drop_high_missing,
+                exclude_cols=args.exclude_cols,
+            )
         )
-        config["exclude_cols"] = (
-            args.exclude_cols
-            if args.exclude_cols is not None
-            else FEATURE_CONFIG.get("exclude_cols")
-        )
-        config["missing_strategy"] = FEATURE_CONFIG.get("missing_strategy", "median")
 
         custom_params = {}
         if args.C is not None:
@@ -359,12 +349,12 @@ def main():
     print(f"\n{'=' * 80}")
     print("TRAINING COMPLETE")
     print(f"{'=' * 80}")
-    print(f"Models saved to: models/{args.model_type}")
+    print(f"Models saved to: {save_dir}")
     print(f"\nTo evaluate, run:")
-    print(f"  python scripts/evaluate.py --model_dir models/{args.model_type}")
+    print(f"  python scripts/evaluate.py --model_dir {save_dir}")
     print()
     print(f"To generate predictions, run:")
-    print(f"  python scripts/predict.py --model_dir models/{args.model_type}")
+    print(f"  python scripts/predict.py --model_dir {save_dir}")
 
     if args.model_type == "pca":
         print(f"\nPCA models trained successfully!")

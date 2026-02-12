@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from configs.config import DATA_CONFIG, PROJECT_ROOT, ID_COLUMNS
 from src.data.data_manager import DataManager
 from src.pipeline.predictor import Predictor
+from src.pipeline.workflow import WorkflowConfig, load_and_filter_data
 from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.models.bnn_model import BNNModel
@@ -263,10 +264,12 @@ def main():
 
     # Load and prepare data
     print("\nLoading data...")
-    data_manager.load_data(args.data_path)
-    data_manager.apply_filters(
-        min_meetings_rat=args.min_meetings_rat, min_dissent=args.min_dissent
+    workflow = WorkflowConfig(
+        data_path=args.data_path,
+        min_meetings_rat=args.min_meetings_rat,
+        min_dissent=args.min_dissent,
     )
+    load_and_filter_data(data_manager, workflow)
 
     # Get rationales from models
     first_model = next(iter(models.values()))
@@ -274,13 +277,16 @@ def main():
     # Handle different model types
     if hasattr(first_model, "rationales"):
         # Multi-label models (MC Dropout, BNN)
-        rationales = first_model.rationales
+        rationales = list(first_model.rationales)
     elif hasattr(first_model, "rationale"):
-        # Single-label models (Supervised, PCA, etc.)
+        # Single-label models (Supervised, PCA, GP)
         rationales = [m.rationale for m in models.values() if hasattr(m, "rationale")]
     else:
         # Fallback: use model keys as rationales
         rationales = list(models.keys())
+
+    # preserve order while removing accidental duplicates
+    rationales = list(dict.fromkeys(rationales))
 
     print(f"Rationales: {rationales}")
 
