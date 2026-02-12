@@ -13,7 +13,6 @@ from src.models.supervised import SupervisedRationaleModel
 from src.models.mc_dropout import MCDropoutModel
 from src.data.data_manager import DataManager
 from src.models.bnn_model import BNNModel
-from src.models.gaussian_process import GPModel
 from configs.config import CATEGORICAL_IDS
 
 try:
@@ -57,6 +56,46 @@ class Predictor:
         self.id_columns = id_columns or CATEGORICAL_IDS
         self.batch_size = batch_size
 
+
+    @staticmethod
+    def _align_features_to_model(
+        X: np.ndarray,
+        current_feature_names: List[str],
+        expected_feature_names: Optional[List[str]],
+    ) -> np.ndarray:
+        """Align feature matrix columns to a model's expected feature order."""
+        if not expected_feature_names:
+            return X
+
+        if list(current_feature_names) == list(expected_feature_names):
+            return X
+
+        name_to_idx = {name: idx for idx, name in enumerate(current_feature_names)}
+        aligned = np.zeros((X.shape[0], len(expected_feature_names)), dtype=float)
+
+        missing = []
+        for j, name in enumerate(expected_feature_names):
+            idx = name_to_idx.get(name)
+            if idx is None:
+                missing.append(name)
+                continue
+            aligned[:, j] = X[:, idx]
+
+        if missing:
+            print(
+                f"Warning: {len(missing)} expected features missing at inference; "
+                "filled with zeros. Example: "
+                f"{missing[:5]}"
+            )
+
+        extra = set(current_feature_names) - set(expected_feature_names)
+        if extra:
+            print(
+                f"Note: Dropping {len(extra)} extra inference features not used by model."
+            )
+
+        return aligned
+
     def predict_single_label_models(
         self,
         models: Dict[str, SupervisedRationaleModel],
@@ -91,7 +130,12 @@ class Predictor:
             print(f"Predicting {rationale}...", end=" ", flush=True)
 
             try:
-                X, _, _ = data_manager.prepare_for_inference(unlabeled_df, [rationale])
+                X, _, feature_names = data_manager.prepare_for_inference(unlabeled_df, [rationale])
+                X = self._align_features_to_model(
+                    X,
+                    feature_names,
+                    getattr(model, "feature_names", None),
+                )
 
                 # Predict
                 y_prob = model.predict_proba(X)
@@ -497,11 +541,23 @@ class Predictor:
             # Check if it's a GP model
             elif hasattr(model, "__class__") and "GPModel" in model.__class__.__name__:
                 return self.predict_gp(
-                    model=model,
+                    models={model_key: model},
                     unlabeled_df=unlabeled_df,
                     data_manager=data_manager,
                     include_uncertainty=include_uncertainty,
                 )
+
+        # Multi-rationale GP models
+        if all(
+            hasattr(m, "__class__") and "GPModel" in m.__class__.__name__
+            for m in models.values()
+        ):
+            return self.predict_gp(
+                models=models,
+                unlabeled_df=unlabeled_df,
+                data_manager=data_manager,
+                include_uncertainty=include_uncertainty,
+            )
 
         # Default: single-label models (one per rationale)
         return self.predict_single_label_models(
@@ -551,7 +607,9 @@ class Predictor:
                     data_manager=data_manager,
                 )
 
-        elif GP_AVAILABLE:
+        elif GP_AVAILABLE and all(
+            isinstance(m, GPModel) for m in models.values()
+        ):
             return self.predict_gp(
                 models=models,
                 unlabeled_df=unlabeled_df,
@@ -559,7 +617,7 @@ class Predictor:
                 include_uncertainty=kwargs.get("include_uncertainty", False),
             )
 
-        elif isinstance(first_model, SupervisedRationaleModel):
+        if len(models) == 1 and isinstance(first_model, SupervisedRationaleModel):
             return self.predict_supervised(
                 models=models,
                 unlabeled_df=unlabeled_df,
