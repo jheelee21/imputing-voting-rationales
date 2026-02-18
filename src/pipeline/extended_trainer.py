@@ -670,7 +670,7 @@ class ExtendedModelTrainer:
         print(f"{'=' * 80}\n")
 
         # Check if model type is hierarchical
-        if self.model_type == "hierarchical":
+        if self.model_type == "hierarchical" or self.model_type == "bhm_improved":
             model = self.train_hierarchical(
                 train_df=train_df,
                 rationales=rationales,

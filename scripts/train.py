@@ -351,10 +351,10 @@ def main():
     print(f"{'=' * 80}")
     print(f"Models saved to: {save_dir}")
     print(f"\nTo evaluate, run:")
-    print(f"  python scripts/evaluate.py --model_dir {save_dir}")
+    print(f"  python scripts/evaluate.py --model_dir models/{args.model_type}")
     print()
     print(f"To generate predictions, run:")
-    print(f"  python scripts/predict.py --model_dir {save_dir}")
+    print(f"  python scripts/predict.py --model_dir models/{args.model_type}")
 
     if args.model_type == "pca":
         print(f"\nPCA models trained successfully!")

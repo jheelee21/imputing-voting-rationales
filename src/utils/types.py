@@ -19,24 +19,12 @@ class ModelType(Enum):
     PCA = "pca"
     HIERARCHICAL = "hierarchical"
     BAYESIAN_HIERARCHICAL = "bayesian_hierarchical"
+    BHM_IMPROVED = "bhm_improved"
 
 
 def get_trainable_model_types() -> List[str]:
     """Model type strings accepted by scripts/train.py."""
-    return [
-        ModelType.LOGISTIC.value,
-        ModelType.RANDOM_FOREST.value,
-        ModelType.GRADIENT_BOOSTING.value,
-        ModelType.MC_DROPOUT.value,
-        ModelType.BNN.value,
-        ModelType.CATBOOST.value,
-        ModelType.LIGHTGBM.value,
-        ModelType.XGBOOST.value,
-        ModelType.SPARSE_GP.value,
-        ModelType.DEEP_KERNEL_GP.value,
-        ModelType.PCA.value,
-        ModelType.HIERARCHICAL.value,
-    ]
+    return list(model.value for model in ModelType)
 
 
 def get_extended_model_types() -> List[str]:
@@ -50,4 +38,5 @@ def get_extended_model_types() -> List[str]:
         ModelType.DEEP_KERNEL_GP.value,
         ModelType.PCA.value,
         ModelType.HIERARCHICAL.value,
+        ModelType.BHM_IMPROVED.value,
     ]
