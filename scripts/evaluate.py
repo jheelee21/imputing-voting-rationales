@@ -13,6 +13,7 @@ Usage:
 import argparse
 import sys
 import pickle
+import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -85,6 +86,12 @@ def load_models(model_dir: Path):
         with open(bnn_path, "rb") as f:
             models["bnn"] = pickle.load(f)
         return models, "bnn"
+    
+    hierarchical_path = model_dir / "hierarchical_model.pkl"
+    if hierarchical_path.exists():
+        with open(hierarchical_path, "rb") as f:
+            models["hierarchical"] = pickle.load(f)
+        return models, "hierarchical"
 
     # Per-rationale: *_model.pkl (supervised, PCA, calibrated boosting, or GP)
     for model_path in sorted(model_dir.glob("*_model.pkl")):
@@ -254,16 +261,52 @@ def main():
 
     evaluator = ModelEvaluator(save_plots=not args.no_plots)
 
-    if model_type in ("mc_dropout", "bnn"):
+    if model_type in ("mc_dropout", "bnn", "hierarchical"):
+
         model = next(iter(models.values()))
-        results = evaluator.evaluate_model(
-            model=model,
-            test_df=test_df,
-            data_manager=data_manager,
-            output_dir=output_dir,
-            num_samples=args.num_mc_samples,
-        )
+
+        if model_type == "hierarchical":
+            print("Using hierarchical evaluation pipeline...")
+
+            # Build features + indices
+            X_test = data_manager.build_features(test_df)
+
+            investor_idx = data_manager.get_investor_indices(test_df)
+            firm_idx = data_manager.get_firm_indices(test_df)
+            year_idx = data_manager.get_year_indices(test_df)
+
+            # Prevent out-of-bounds indices
+            firm_idx = np.clip(firm_idx, 0, model.num_firms - 1)
+            investor_idx = np.clip(investor_idx, 0, model.num_investors - 1)
+            year_idx = np.clip(year_idx, 0, model.num_years - 1)
+
+            probs = model.predict_proba(
+                X=X_test,
+                investor_idx=investor_idx,
+                firm_idx=firm_idx,
+                year_idx=year_idx,
+                num_samples=args.num_mc_samples,
+            )
+
+            results = evaluator.evaluate_predictions(
+                probs=probs,
+                test_df=test_df,
+                rationales=rationales,
+                output_dir=output_dir,
+            )
+
+        else:
+            print("Using standard multi-label evaluation...")
+            results = evaluator.evaluate_model(
+                model=model,
+                test_df=test_df,
+                data_manager=data_manager,
+                output_dir=output_dir,
+                num_samples=args.num_mc_samples,
+            )
+
     else:
+        # Per-rationale classical models
         if len(models) == 1:
             model = next(iter(models.values()))
             results = evaluator.evaluate_model(

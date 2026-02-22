@@ -21,16 +21,16 @@ from src.models.base_model import BaseRationaleModel
 # Pyro Hierarchical Logistic Module
 # ============================================================
 
-
 class BayesianHierarchicalLogistic(PyroModule):
     def __init__(
         self,
         input_dim: int,
-        output_dim: int,
+        output_dim: int,  # should be 5
         n_investors: int,
         n_firms: int,
         n_years: int,
-        prior_scale: float = 0.1,
+        prior_scale: float = 0.5,
+        class_weights: Optional[torch.Tensor] = None,
     ):
         super().__init__()
 
@@ -39,6 +39,115 @@ class BayesianHierarchicalLogistic(PyroModule):
         self.n_investors = n_investors
         self.n_firms = n_firms
         self.n_years = n_years
+        self.class_weights = class_weights
+
+        # =====================================================
+        # 🔥 RATIONALE HIERARCHY
+        # =====================================================
+
+        # Global mean across rationales
+        self.global_beta_mean = PyroSample(
+            dist.Normal(0.0, prior_scale)
+            .expand([input_dim])
+            .to_event(1)
+        )
+
+        # Variance controlling pooling strength
+        self.sigma_rationale = PyroSample(dist.HalfNormal(1.0))
+
+        # Rationale-specific coefficients
+        self.beta = PyroSample(
+            dist.Normal(
+                self.global_beta_mean,
+                self.sigma_rationale
+            )
+            .expand([output_dim, input_dim])
+            .to_event(2)
+        )
+
+        # =====================================================
+        # Random intercepts (unchanged)
+        # =====================================================
+
+        self.sigma_investor = PyroSample(dist.HalfNormal(1.0))
+        self.sigma_firm = PyroSample(dist.HalfNormal(1.0))
+        self.sigma_year = PyroSample(dist.HalfNormal(1.0))
+
+        self.alpha_investor = PyroSample(
+            dist.Normal(0.0, self.sigma_investor)
+            .expand([output_dim, n_investors])
+            .to_event(2)
+        )
+
+        self.gamma_firm = PyroSample(
+            dist.Normal(0.0, self.sigma_firm)
+            .expand([output_dim, n_firms])
+            .to_event(2)
+        )
+
+        self.delta_year = PyroSample(
+            dist.Normal(0.0, self.sigma_year)
+            .expand([output_dim, n_years])
+            .to_event(2)
+        )
+
+    # =========================================================
+    # Forward
+    # =========================================================
+
+    def forward(self, x, investor_idx, firm_idx, year_idx, y=None):
+
+        logits_fixed = x @ self.beta.T
+
+        investor_effect = self.alpha_investor[:, investor_idx].T
+        firm_effect = self.gamma_firm[:, firm_idx].T
+        year_effect = self.delta_year[:, year_idx].T
+
+        logits = logits_fixed + investor_effect + firm_effect + year_effect
+
+        with pyro.plate("data", x.shape[0]):
+
+            if y is not None and self.class_weights is not None:
+
+                log_prob = dist.Bernoulli(logits=logits).log_prob(y)
+
+                weights = torch.where(
+                    y == 1,
+                    self.class_weights,
+                    torch.ones_like(self.class_weights),
+                )
+
+                weighted_log_prob = log_prob * weights
+                pyro.factor("weighted_obs", weighted_log_prob.sum())
+
+            else:
+                pyro.sample(
+                    "obs",
+                    dist.Bernoulli(logits=logits).to_event(1),
+                    obs=y,
+                )
+
+        return logits
+
+class _BayesianHierarchicalLogistic(PyroModule):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        n_investors: int,
+        n_firms: int,
+        n_years: int,
+        prior_scale: float = 0.1,
+        class_weights: Optional[torch.Tensor] = None,  # NEW
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_investors = n_investors
+        self.n_firms = n_firms
+        self.n_years = n_years
+        self.class_weights = class_weights  # NEW
 
         # -----------------------------
         # Fixed Effects
@@ -72,10 +181,9 @@ class BayesianHierarchicalLogistic(PyroModule):
         )
 
     def forward(self, x, investor_idx, firm_idx, year_idx, y=None):
-        # Fixed effects
-        logits_fixed = x @ self.beta.T  # (batch, output_dim)
 
-        # Random effects
+        logits_fixed = x @ self.beta.T
+
         investor_effect = self.alpha_investor[:, investor_idx].T
         firm_effect = self.gamma_firm[:, firm_idx].T
         year_effect = self.delta_year[:, year_idx].T
@@ -83,11 +191,29 @@ class BayesianHierarchicalLogistic(PyroModule):
         logits = logits_fixed + investor_effect + firm_effect + year_effect
 
         with pyro.plate("data", x.shape[0]):
-            pyro.sample(
-                "obs",
-                dist.Bernoulli(logits=logits).to_event(1),
-                obs=y,
-            )
+
+            if y is not None and self.class_weights is not None:
+
+                # Standard log-likelihood
+                log_prob = dist.Bernoulli(logits=logits).log_prob(y)
+
+                # Weight only positive labels
+                weights = torch.where(
+                    y == 1,
+                    self.class_weights,
+                    torch.ones_like(self.class_weights),
+                )
+
+                weighted_log_prob = log_prob * weights
+
+                pyro.factor("weighted_obs", weighted_log_prob.sum())
+
+            else:
+                pyro.sample(
+                    "obs",
+                    dist.Bernoulli(logits=logits).to_event(1),
+                    obs=y,
+                )
 
         return logits
 
@@ -101,16 +227,16 @@ class HierarchicalModel(BaseRationaleModel):
     def __init__(
         self,
         rationales: List[str],
-        prior_scale: float = 0.1,
-        learning_rate: float = 0.001,
-        num_epochs: int = 100,
-        batch_size: int = 512,
+        prior_scale: float = 0.5,
+        learning_rate: float = 0.005,
+        num_epochs: int = 200,
+        batch_size: int = 128,
         num_samples: int = 100,
-        patience: int = 10,
+        patience: int = 20,
         min_delta: float = 1.0,
-        grad_clip: float = 1.0,
+        grad_clip: float = 5.0,
         device: str = None,
-        random_seed: int = 21,
+        random_seed: int = 123,
     ):
         super().__init__(rationales, "hierarchical", random_seed)
 
@@ -162,6 +288,13 @@ class HierarchicalModel(BaseRationaleModel):
         n_firms = firm_idx.max() + 1
         n_years = year_idx.max() + 1
 
+        pos_counts = y.sum(axis=0)
+        neg_counts = y.shape[0] - pos_counts
+
+        class_weights = torch.FloatTensor(
+            neg_counts / (pos_counts + 1e-8)
+        ).to(self.device)
+
         self.model = BayesianHierarchicalLogistic(
             input_dim=input_dim,
             output_dim=output_dim,
@@ -169,6 +302,7 @@ class HierarchicalModel(BaseRationaleModel):
             n_firms=n_firms,
             n_years=n_years,
             prior_scale=self.prior_scale,
+            class_weights=class_weights
         ).to(self.device)
 
         self.guide = pyro.infer.autoguide.AutoDiagonalNormal(
@@ -230,6 +364,8 @@ class HierarchicalModel(BaseRationaleModel):
         year_idx: np.ndarray,
         num_samples: Optional[int] = None,
     ):
+        from pyro.infer import Predictive
+
         if not self.is_fitted:
             raise RuntimeError("Model must be fitted first")
 
@@ -241,23 +377,28 @@ class HierarchicalModel(BaseRationaleModel):
         firm_t = torch.LongTensor(firm_idx).to(self.device)
         year_t = torch.LongTensor(year_idx).to(self.device)
 
-        all_probs = []
+        predictive = Predictive(
+            self.model,
+            guide=self.guide,
+            num_samples=num_samples,
+            return_sites=["_RETURN"],  # logits returned from forward()
+        )
 
         with torch.no_grad():
-            for _ in range(num_samples):
-                guide_trace = pyro.poutine.trace(self.guide).get_trace(
-                    X_t, inv_t, firm_t, year_t, None
-                )
+            samples = predictive(
+                X_t,
+                inv_t,
+                firm_t,
+                year_t,
+                None,  # no observed y
+            )
 
-                model_trace = pyro.poutine.trace(
-                    pyro.poutine.replay(self.model, trace=guide_trace)
-                ).get_trace(X_t, inv_t, firm_t, year_t, None)
+        # shape: (num_samples, batch_size, output_dim)
+        logits = samples["_RETURN"]
 
-                logits = model_trace.nodes["_RETURN"]["value"]
-                probs = torch.sigmoid(logits)
-                all_probs.append(probs.cpu().numpy())
+        probs = torch.sigmoid(logits)
 
-        all_probs = np.array(all_probs)
-        mean_probs = all_probs.mean(axis=0)
+        # average over posterior samples
+        mean_probs = probs.mean(dim=0)
 
-        return mean_probs
+        return mean_probs.cpu().numpy()
