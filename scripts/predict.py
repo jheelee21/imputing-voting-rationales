@@ -5,6 +5,7 @@ Unified prediction script for generating predictions on unlabeled data.
 Usage:
     python predict.py --model_dir models/logistic --output_dir results/predictions
     python predict.py --model_dir models/mc_dropout --include_uncertainty
+    python predict.py --model_dir models/hierarchical
     python predict.py --model_dir models/pca --output_dir predictions/pca
 """
 
@@ -15,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from configs.config import DATA_CONFIG, PROJECT_ROOT, ID_COLUMNS
+from configs.config import DATA_CONFIG, PROJECT_ROOT, ID_COLUMNS, CORE_RATIONALES
 from src.data.data_manager import DataManager
 from src.pipeline.predictor import Predictor
 from src.pipeline.workflow import WorkflowConfig, load_and_filter_data
@@ -35,11 +36,33 @@ try:
 except ImportError:
     GP_AVAILABLE = False
 
+# ---------- hierarchical model ----------
+try:
+    from src.models.bayesian_hierarchial import HierarchicalModel
+
+    HIERARCHICAL_AVAILABLE = True
+except ImportError:
+    HierarchicalModel = None
+    HIERARCHICAL_AVAILABLE = False
+
+# ---------- PCA model ----------
+try:
+    from src.models.pca_model import PCAModel
+
+    PCA_AVAILABLE = True
+except ImportError:
+    PCAModel = None
+    PCA_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 
 def _load_gp_model(model_path: Path):
     """
     Robust GP loader.
-
     Supports both:
     1) Pickled GPModel object
     2) GP metadata checkpoint dict saved by GPModel.save(...)
@@ -116,29 +139,82 @@ def _load_gp_model(model_path: Path):
     return model
 
 
-def load_models(model_dir: Path):
-    """Load all models from directory, including PCA models."""
+def _resolve_hierarchical_rationales(model) -> list:
+    """
+    Extract the real rationale list from a loaded HierarchicalModel.
+
+    The saved model's .rationales attribute is authoritative — UNLESS it was
+    accidentally set to the model-type name (e.g. ['hierarchical']), which
+    happens when an old pickle was stored with the dict key rather than the
+    training target list.  In that case we fall back to CORE_RATIONALES.
+    """
+    MODEL_TYPE_NAMES = {"hierarchical", "mc_dropout", "bnn", "supervised", "pca"}
+
+    raw = getattr(model, "rationales", None) or []
+
+    # Detect corruption: all entries are model-type placeholders
+    if raw and all(r in MODEL_TYPE_NAMES for r in raw):
+        print(
+            f"  Warning: model.rationales={raw} looks like a model-type placeholder. "
+            f"Falling back to CORE_RATIONALES={list(CORE_RATIONALES)}"
+        )
+        return list(CORE_RATIONALES)
+
+    # Also fall back if the list is empty
+    if not raw:
+        print(
+            f"  Warning: model.rationales is empty. "
+            f"Falling back to CORE_RATIONALES={list(CORE_RATIONALES)}"
+        )
+        return list(CORE_RATIONALES)
+
+    return list(raw)
+
+
+def load_models(model_dir: Path) -> dict:
+    """Load all models from directory, including hierarchical and PCA models."""
     models = {}
 
-    # Check for MC Dropout model
+    # ---- MC Dropout (single file, multi-label) ----
     mc_dropout_path = model_dir / "mc_dropout_model.pkl"
     if mc_dropout_path.exists():
         models["mc_dropout"] = MCDropoutModel.load(str(mc_dropout_path))
         return models
 
-    # Check for BNN model
+    # ---- BNN (single file, multi-label) ----
     bnn_path = model_dir / "bnn_model.pkl"
     if bnn_path.exists():
         models["bnn"] = BNNModel.load(str(bnn_path))
         return models
 
-    # Load per-rationale models (supervised / boosting / GP)
+    # ---- Hierarchical Bayesian (single file, multi-label) ----
+    # FIX: Use HierarchicalModel.load() instead of raw pickle.load() so the
+    # Pyro guide is properly reconstructed and model.rationales is set correctly.
+    hierarchical_path = model_dir / "hierarchical_model.pkl"
+    if hierarchical_path.exists():
+        if HIERARCHICAL_AVAILABLE:
+            try:
+                model = HierarchicalModel.load(str(hierarchical_path))
+                models["hierarchical"] = model
+                print(f"  Loaded hierarchical model: rationales={model.rationales}")
+                return models
+            except Exception as e:
+                print(f"  HierarchicalModel.load() failed ({e}), trying raw pickle...")
+
+        # Fallback: raw pickle (older format)
+        with open(hierarchical_path, "rb") as f:
+            models["hierarchical"] = pickle.load(f)
+        print("  Loaded hierarchical model via raw pickle (older format).")
+        return models
+
+    # ---- Per-rationale models (supervised / boosting / GP / PCA) ----
     for model_path in sorted(model_dir.glob("*_model.pkl")):
-        if model_path.stem in {"mc_dropout_model", "bnn_model"}:
+        if model_path.stem in {"mc_dropout_model", "bnn_model", "hierarchical_model"}:
             continue
 
         rationale = model_path.stem.replace("_model", "")
 
+        # Try GP first
         gp_error = None
         if GP_AVAILABLE:
             try:
@@ -148,15 +224,32 @@ def load_models(model_dir: Path):
             except Exception as e:
                 gp_error = e
 
+        # Try PCA
+        if PCA_AVAILABLE:
+            try:
+                with open(model_path, "rb") as f:
+                    temp = pickle.load(f)
+                if isinstance(temp, dict) and "pca" in temp:
+                    models[rationale] = PCAModel.load(str(model_path))
+                    continue
+            except Exception:
+                pass
+
+        # Fall back to supervised
         try:
             models[rationale] = SupervisedRationaleModel.load(str(model_path))
         except Exception as supervised_error:
             print(
-                f"Warning: Could not load {model_path.name} as GP "
+                f"  Warning: Could not load {model_path.name} as GP "
                 f"({gp_error}) or supervised model ({supervised_error})."
             )
 
     return models
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main():
@@ -165,7 +258,6 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    # Model configuration
     parser.add_argument(
         "--model_dir",
         type=str,
@@ -178,8 +270,6 @@ def main():
         default=None,
         help="Directory to save predictions (default: predictions/{model_type})",
     )
-
-    # Data configuration
     parser.add_argument(
         "--data_path",
         type=str,
@@ -198,18 +288,16 @@ def main():
         default=DATA_CONFIG["min_dissent"],
         help="Minimum N_dissent filter",
     )
-
-    # Prediction configuration
     parser.add_argument(
         "--include_uncertainty",
         action="store_true",
-        help="Include uncertainty estimates (MC Dropout only)",
+        help="Include uncertainty estimates (hierarchical / MC Dropout)",
     )
     parser.add_argument(
         "--num_mc_samples",
         type=int,
         default=50,
-        help="Number of MC samples for uncertainty (MC Dropout only)",
+        help="Number of posterior / MC samples for uncertainty estimation",
     )
     parser.add_argument(
         "--batch_size",
@@ -218,23 +306,22 @@ def main():
         help="Process in batches (for large datasets)",
     )
     parser.add_argument(
-        "--output_filename", type=str, default="predictions.csv", help="Output filename"
+        "--output_filename",
+        type=str,
+        default="predictions.csv",
+        help="Output filename",
     )
 
     args = parser.parse_args()
-
     model_dir = Path(args.model_dir)
 
-    # Determine output directory
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-    else:
-        model_type = model_dir.name
-        output_dir = PROJECT_ROOT / "predictions" / model_type
-
+    output_dir = (
+        Path(args.output_dir)
+        if args.output_dir
+        else PROJECT_ROOT / "predictions" / model_dir.name
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Print configuration
     print("=" * 80)
     print("VOTING RATIONALE PREDICTION")
     print("=" * 80)
@@ -242,7 +329,7 @@ def main():
     print(f"Output dir: {output_dir}")
     print("=" * 80 + "\n")
 
-    # Load models
+    # ---- Load models ----
     print("Loading models...")
     models = load_models(model_dir)
 
@@ -252,12 +339,13 @@ def main():
 
     print(f"Loaded {len(models)} model(s)")
 
-    # Load data manager
+    # ---- Load data manager ----
     data_manager_path = model_dir / "data_manager.pkl"
     if data_manager_path.exists():
         with open(data_manager_path, "rb") as f:
-            data_manager = pickle.load(f)
-        if isinstance(data_manager, DataManager):
+            dm_candidate = pickle.load(f)
+        if isinstance(dm_candidate, DataManager):
+            data_manager = dm_candidate
             print("Loaded data manager from training")
         else:
             print(
@@ -269,7 +357,7 @@ def main():
         print("Creating new data manager")
         data_manager = DataManager()
 
-    # Load and prepare data
+    # ---- Load and filter data ----
     print("\nLoading data...")
     workflow = WorkflowConfig(
         data_path=args.data_path,
@@ -278,54 +366,68 @@ def main():
     )
     load_and_filter_data(data_manager, workflow)
 
-    # Get rationales from models
+    # ---- Detect model type and resolve rationales ----
     first_model = next(iter(models.values()))
+    model_key = next(iter(models.keys()))
+    is_hierarchical = HIERARCHICAL_AVAILABLE and isinstance(
+        first_model, HierarchicalModel
+    )
 
-    # Handle different model types
-    if hasattr(first_model, "rationales"):
-        # Multi-label models (MC Dropout, BNN)
-        rationales = list(first_model.rationales)
+    if is_hierarchical:
+        # FIX: Use dedicated resolver that handles corrupted .rationales attrs
+        rationales = _resolve_hierarchical_rationales(first_model)
+        # Patch the model in-place so downstream code uses the correct list
+        first_model.rationales = rationales
+    elif hasattr(first_model, "rationales"):
+        # Multi-label models: MC Dropout, BNN
+        rationales = list(dict.fromkeys(first_model.rationales))
     elif hasattr(first_model, "rationale"):
-        # Single-label models (Supervised, PCA, GP)
+        # Per-rationale supervised / GP / PCA models
         rationales = [m.rationale for m in models.values() if hasattr(m, "rationale")]
+        rationales = list(dict.fromkeys(rationales))
     else:
-        # Fallback: use model keys as rationales
+        # Last resort: use dict keys (will only be right for supervised models)
         rationales = list(models.keys())
-
-    # preserve order while removing accidental duplicates
-    rationales = list(dict.fromkeys(rationales))
 
     print(f"Rationales: {rationales}")
 
-    # Get unlabeled data
+    # ---- Get unlabeled data ----
     unlabeled_df = data_manager.get_unlabeled_data(rationales)
 
     if len(unlabeled_df) == 0:
         print("\n⚠️  No unlabeled data found!")
         return
 
-    # Generate predictions
-    predictor = Predictor(
-        id_columns=ID_COLUMNS,
-        batch_size=args.batch_size,
-    )
+    # ---- Generate predictions ----
+    predictor = Predictor(id_columns=ID_COLUMNS, batch_size=args.batch_size)
 
-    predictions_df = predictor.predict(
-        models=models,
-        unlabeled_df=unlabeled_df,
-        data_manager=data_manager,
-        include_uncertainty=args.include_uncertainty,
-        num_samples=args.num_mc_samples,
-    )
+    if is_hierarchical:
+        # FIX: Route hierarchical models directly to predict_hierarchical()
+        # instead of the generic predict() which doesn't know about hierarchical indices.
+        predictions_df = predictor.predict_hierarchical(
+            model=first_model,
+            unlabeled_df=unlabeled_df,
+            data_manager=data_manager,
+            num_samples=args.num_mc_samples,
+            include_uncertainty=args.include_uncertainty,
+        )
+    else:
+        predictions_df = predictor.predict(
+            models=models,
+            unlabeled_df=unlabeled_df,
+            data_manager=data_manager,
+            include_uncertainty=args.include_uncertainty,
+            num_samples=args.num_mc_samples,
+        )
 
-    # Analyze predictions
-    analysis = predictor.analyze_predictions(
+    # ---- Analyze ----
+    predictor.analyze_predictions(
         predictions_df=predictions_df,
         rationales=rationales,
         output_dir=output_dir,
     )
 
-    # Save predictions
+    # ---- Save ----
     output_path = output_dir / args.output_filename
     predictions_df.to_csv(output_path, index=False)
 

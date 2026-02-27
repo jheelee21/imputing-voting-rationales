@@ -38,7 +38,7 @@ def plot_probability_distributions(
 
         # Histogram
         ax.set_xlim(0, 1)
-        ax.set_ylim(0, 25)
+        ax.set_ylim(0, 15)
         bin_width = 0.025
         bins = np.arange(min(probs), max(probs) + bin_width, bin_width)
         ax.hist(probs, bins=bins, alpha=0.7, edgecolor="black", density=True)

@@ -16,6 +16,9 @@ import pickle
 import numpy as np
 from pathlib import Path
 
+from src.models.bayesian_hierarchial import HierarchicalModel
+from scripts.predict import _resolve_hierarchical_rationales
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs.config import DATA_CONFIG, RESULTS_DIR, CORE_RATIONALES
@@ -86,7 +89,7 @@ def load_models(model_dir: Path):
         with open(bnn_path, "rb") as f:
             models["bnn"] = pickle.load(f)
         return models, "bnn"
-    
+
     hierarchical_path = model_dir / "hierarchical_model.pkl"
     if hierarchical_path.exists():
         with open(hierarchical_path, "rb") as f:
@@ -230,20 +233,29 @@ def main():
     data_manager_path = model_dir / "data_manager.pkl"
     if data_manager_path.exists():
         with open(data_manager_path, "rb") as f:
-            data_manager = pickle.load(f)
-        print("Loaded data manager from training")
+            dm_candidate = pickle.load(f)
+        if isinstance(dm_candidate, DataManager):
+            data_manager = dm_candidate
+            print("Loaded data manager from training")
+        else:
+            print(
+                "Warning: data_manager.pkl did not contain a valid DataManager; "
+                "creating a new DataManager."
+            )
+            data_manager = DataManager()
     else:
+        print("Creating new data manager")
         data_manager = DataManager()
-        print("Using new data manager")
-
-    print("\nLoading data...")
-    data_manager.load_data(args.data_path)
-    data_manager.apply_filters(
-        min_meetings_rat=args.min_meetings_rat, min_dissent=args.min_dissent
-    )
 
     first_model = next(iter(models.values()))
-    if (
+    is_hierarchical = isinstance(first_model, HierarchicalModel)
+
+    if is_hierarchical:
+        # FIX: Use dedicated resolver that handles corrupted .rationales attrs
+        rationales = _resolve_hierarchical_rationales(first_model)
+        # Patch the model in-place so downstream code uses the correct list
+        first_model.rationales = rationales
+    elif (
         len(models) == 1
         and hasattr(first_model, "rationales")
         and isinstance(first_model.rationales, list)
@@ -262,7 +274,6 @@ def main():
     evaluator = ModelEvaluator(save_plots=not args.no_plots)
 
     if model_type in ("mc_dropout", "bnn", "hierarchical"):
-
         model = next(iter(models.values()))
 
         if model_type == "hierarchical":
