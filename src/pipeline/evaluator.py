@@ -224,7 +224,7 @@ class ModelEvaluator:
 
         return metrics
 
-    def evaluate_model(
+    def _evaluate_model(
         self,
         model: BaseRationaleModel,
         test_df: pd.DataFrame,
@@ -320,7 +320,7 @@ class ModelEvaluator:
                 f"Unc: {metrics['avg_epistemic_unc']:.4f}"
             )
 
-    def _save_results(
+    def __save_results(
         self,
         results: Dict[str, Any],
         output_dir: Path,
@@ -417,3 +417,314 @@ class ModelEvaluator:
             print(f"\nComparison saved to {output_dir / 'model_comparison.csv'}")
 
         return comparison_df
+
+    def evaluate_predictions(
+        self,
+        probs: "np.ndarray",  # shape (n_test, n_rationales)
+        test_df: "pd.DataFrame",
+        rationales: "List[str]",
+        output_dir: "Optional[Path]" = None,
+        epistemic_std: "Optional[np.ndarray]" = None,  # shape (n_test, n_rationales)
+    ) -> "Dict[str, Any]":
+        """
+        Evaluate a hierarchical Bayesian model given pre-computed probabilities.
+
+        This is the entry-point called by scripts/evaluate.py for the
+        hierarchical model path, where feature extraction and inference have
+        already been done before calling the evaluator.
+
+        Parameters
+        ----------
+        probs : ndarray, shape (n_test, n_rationales)
+            Posterior-mean predicted probabilities, one column per rationale.
+        test_df : DataFrame
+            Test set.  Must contain columns named after each rationale so
+            ground-truth labels can be extracted.
+        rationales : list[str]
+            Ordered list of rationale names (matches columns in probs).
+        output_dir : Path, optional
+            Directory where metrics.csv and a summary print are saved.
+        epistemic_std : ndarray, shape (n_test, n_rationales), optional
+            Per-sample posterior standard deviation.  When supplied it is
+            reported alongside the classification metrics.
+
+        Returns
+        -------
+        dict with keys
+            "model_type"  : "hierarchical"
+            "results"     : {rationale: {"metrics": {...}, ...}, ...}
+            "y_prob"      : probs
+        """
+        import numpy as np
+        import pandas as pd
+        from pathlib import Path
+
+        print(f"\n{'=' * 80}")
+        print("HIERARCHICAL BAYESIAN MODEL — PERFORMANCE METRICS")
+        print(f"{'=' * 80}")
+        print(f"Test samples (total) : {len(test_df):,}")
+
+        results: dict = {}
+
+        for i, rationale in enumerate(rationales):
+            # ── ground-truth labels ──────────────────────────────────────────
+            if rationale not in test_df.columns:
+                print(f"\n  [{rationale}] column not found in test_df – skipping.")
+                continue
+
+            # Keep only rows with a non-NaN label for this rationale
+            valid_mask = test_df[rationale].notna().values
+            y_true = test_df.loc[valid_mask, rationale].values.astype(int)
+            y_prob = probs[valid_mask, i]
+            y_pred = (y_prob >= 0.5).astype(int)
+
+            if y_true.sum() == 0:
+                print(f"\n  [{rationale}] no positive labels – skipping metrics.")
+                continue
+
+            # ── classification metrics ───────────────────────────────────────
+            metrics = self._compute_metrics(y_true, y_pred, y_prob, rationale)
+
+            # ── epistemic uncertainty (Bayesian bonus) ───────────────────────
+            if epistemic_std is not None:
+                metrics["avg_epistemic_std"] = float(
+                    epistemic_std[valid_mask, i].mean()
+                )
+                metrics["high_conf_pct"] = float(
+                    (epistemic_std[valid_mask, i] < 0.1).mean() * 100
+                )
+
+            results[rationale] = {
+                "metrics": metrics,
+                "y_true": y_true,
+                "y_pred": y_pred,
+                "y_prob": y_prob,
+            }
+
+        # ── pretty-print ─────────────────────────────────────────────────────
+        self._print_hierarchical_results(results)
+
+        # ── save ─────────────────────────────────────────────────────────────
+        if output_dir:
+            self._save_results(
+                {"model_type": "hierarchical", "results": results},
+                output_dir,
+                "hierarchical",
+            )
+
+        return {
+            "model_type": "hierarchical",
+            "results": results,
+            "y_prob": probs,
+        }
+
+    def _print_hierarchical_results(self, results: "Dict[str, Any]") -> None:
+        """Pretty-print per-rationale metrics for a hierarchical model."""
+        metric_order = [
+            ("accuracy", "Accuracy      "),
+            ("precision", "Precision     "),
+            ("recall", "Recall        "),
+            ("f1", "F1 Score      "),
+            ("roc_auc", "ROC-AUC       "),
+            ("avg_precision", "Avg Precision "),
+            ("log_loss", "Log Loss      "),
+            ("brier_score", "Brier Score   "),
+            ("avg_epistemic_std", "Epistemic Std "),
+            ("high_conf_pct", "High-Conf %   "),
+        ]
+
+        print(f"\nPer-Rationale Metrics:")
+        print(f"{'-' * 80}")
+
+        for rationale, res in results.items():
+            m = res["metrics"]
+            n_pos = m.get("n_positive", "?")
+            n_samp = m.get("n_samples", "?")
+            pos_rt = m.get("positive_rate", float("nan"))
+
+            print(f"\n  {rationale}  (n={n_samp:,}, positives={n_pos} / {pos_rt:.1%})")
+            for key, label in metric_order:
+                if key in m and m[key] is not None:
+                    val = m[key]
+                    # percentages look better without the ×100 multiplication
+                    fmt = f"{val:.1f}%" if key == "high_conf_pct" else f"{val:.4f}"
+                    print(f"    {label}: {fmt}")
+
+    def _save_results(
+        self,
+        results: "Dict[str, Any]",
+        output_dir: "Path",
+        model_type: str,
+    ) -> None:
+        """Save evaluation results to disk."""
+        import pandas as pd
+        from pathlib import Path
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Multi-label models (mc_dropout, bnn, hierarchical) share the same
+        # nested results structure: results["results"][rationale]["metrics"]
+        if model_type in ("mc_dropout", "bnn", "hierarchical"):
+            metrics_list = []
+            for rationale, res in results["results"].items():
+                metric_dict = res["metrics"].copy()
+                metric_dict["rationale"] = rationale
+                metrics_list.append(metric_dict)
+
+            metrics_df = pd.DataFrame(metrics_list)
+            metrics_df.to_csv(output_dir / "metrics.csv", index=False)
+            print(f"\nMetrics saved to {output_dir / 'metrics.csv'}")
+
+        else:
+            # Single-rationale supervised model
+            metrics_df = pd.DataFrame([results["metrics"]])
+            metrics_df["rationale"] = results["rationale"]
+            out_path = output_dir / f"{results['rationale']}_metrics.csv"
+            metrics_df.to_csv(out_path, index=False)
+            print(f"\nResults saved to {out_path}")
+
+    def tune_thresholds(
+        self,
+        results: dict,
+        output_dir=None,
+        metric: str = "f1",
+        thresholds=None,
+    ) -> dict:
+        """
+        Find the optimal decision threshold for each rationale by sweeping over
+        candidate values and maximising `metric` (default: F1).
+
+        Parameters
+        ----------
+        results : dict
+            Output of evaluate_predictions() — expects results["results"][rationale]
+            to contain "y_true" and "y_prob".
+        output_dir : Path or str, optional
+            Where to save threshold_tuning.csv.
+        metric : str
+            Which metric to maximise: "f1" | "precision" | "recall" | "balanced_accuracy"
+        thresholds : array-like, optional
+            Candidate thresholds. Defaults to np.arange(0.05, 0.70, 0.01).
+
+        Returns
+        -------
+        dict  {rationale: {"threshold": float, "f1": float, "precision": float,
+                            "recall": float, "balanced_accuracy": float}}
+        """
+        import numpy as np
+        import pandas as pd
+        from pathlib import Path
+        from sklearn.metrics import (
+            f1_score,
+            precision_score,
+            recall_score,
+            balanced_accuracy_score,
+        )
+
+        if thresholds is None:
+            thresholds = np.arange(0.05, 0.70, 0.01)
+
+        nested = results.get("results", {})
+        if not nested:
+            print("tune_thresholds: no per-rationale results found.")
+            return {}
+
+        print(f"\n{'=' * 80}")
+        print(f"THRESHOLD TUNING  (optimising: {metric.upper()})")
+        print(f"{'=' * 80}")
+
+        best_thresholds = {}
+        rows = []
+
+        for rationale, res in nested.items():
+            y_true = res.get("y_true")
+            y_prob = res.get("y_prob")
+
+            if y_true is None or y_prob is None:
+                print(f"  [{rationale}] missing y_true/y_prob — skipping.")
+                continue
+
+            if y_true.sum() == 0:
+                print(f"  [{rationale}] no positives — skipping.")
+                continue
+
+            best_val, best_t = -1.0, 0.5
+            sweep_rows = []
+
+            for t in thresholds:
+                y_pred = (y_prob >= t).astype(int)
+
+                f1 = f1_score(y_true, y_pred, zero_division=0)
+                pre = precision_score(y_true, y_pred, zero_division=0)
+                rec = recall_score(y_true, y_pred, zero_division=0)
+                bal = balanced_accuracy_score(y_true, y_pred)
+
+                sweep_rows.append(
+                    {
+                        "rationale": rationale,
+                        "threshold": round(t, 3),
+                        "f1": f1,
+                        "precision": pre,
+                        "recall": rec,
+                        "balanced_accuracy": bal,
+                    }
+                )
+
+                target = {
+                    "f1": f1,
+                    "precision": pre,
+                    "recall": rec,
+                    "balanced_accuracy": bal,
+                }.get(metric, f1)
+                if target > best_val:
+                    best_val, best_t = target, t
+
+            rows.extend(sweep_rows)
+
+            # Metrics at the best threshold
+            y_pred_best = (y_prob >= best_t).astype(int)
+            best_f1 = f1_score(y_true, y_pred_best, zero_division=0)
+            best_pre = precision_score(y_true, y_pred_best, zero_division=0)
+            best_rec = recall_score(y_true, y_pred_best, zero_division=0)
+            best_bal = balanced_accuracy_score(y_true, y_pred_best)
+
+            # Metrics at the default 0.5 threshold for comparison
+            y_pred_05 = (y_prob >= 0.5).astype(int)
+            f1_05 = f1_score(y_true, y_pred_05, zero_division=0)
+
+            best_thresholds[rationale] = {
+                "threshold": round(float(best_t), 3),
+                "f1": round(float(best_f1), 4),
+                "precision": round(float(best_pre), 4),
+                "recall": round(float(best_rec), 4),
+                "balanced_accuracy": round(float(best_bal), 4),
+                "f1_at_0.5": round(float(f1_05), 4),
+            }
+
+            delta = best_f1 - f1_05
+            sign = "+" if delta >= 0 else ""
+            print(
+                f"\n  {rationale}"
+                f"\n    Best threshold : {best_t:.2f}"
+                f"\n    F1 @ 0.50      : {f1_05:.4f}"
+                f"\n    F1 @ {best_t:.2f}     : {best_f1:.4f}  ({sign}{delta:.4f})"
+                f"\n    Precision      : {best_pre:.4f}"
+                f"\n    Recall         : {best_rec:.4f}"
+                f"\n    Balanced Acc   : {best_bal:.4f}"
+            )
+
+        # ── save full sweep CSV ───────────────────────────────────────────────
+        if output_dir and rows:
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            sweep_df = pd.DataFrame(rows)
+            sweep_df.to_csv(out / "threshold_sweep.csv", index=False)
+
+            best_df = pd.DataFrame(best_thresholds).T.reset_index()
+            best_df.rename(columns={"index": "rationale"}, inplace=True)
+            best_df.to_csv(out / "best_thresholds.csv", index=False)
+            print(f"\n  Saved: {out / 'threshold_sweep.csv'}")
+            print(f"  Saved: {out / 'best_thresholds.csv'}")
+
+        return best_thresholds
