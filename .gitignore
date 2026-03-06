@@ -13,3 +13,4 @@ models/*
 catboost_info/*
 predictions/*
 embeddings/*
+new_env/*

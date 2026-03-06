@@ -45,6 +45,58 @@ STOP_WORDS = set(_nltk_stopwords.words("english"))
 _lemmatizer = WordNetLemmatizer()
 
 
+import re
+
+# Known investor-identity tokens that should NOT drive cluster separation.
+# Extend this list whenever a new boilerplate cluster appears.
+_DEFAULT_INVESTOR_TOKENS: list[str] = [
+    # LGIM
+    "lgim", "lgim expects", "legal general", "l&g",
+    "applied lgim", "vote applied", "board regularly", "regularly refreshed",
+    "refreshed order", "order maintain",
+    # AllianzGI
+    "allianzgi", "allianz", "allianz global investors",
+    "belief board", "comprise director", "effectively contribute",
+    "qualification experience", "skill capacity", "capacity effectively",
+    # Generic boilerplate guards (extend as needed)
+    "we vote", "our policy", "our guidelines", "voting guidelines",
+]
+
+# Compiled once at import time for speed
+def _build_investor_pattern(tokens: list[str]) -> re.Pattern:
+    escaped = sorted((re.escape(t) for t in tokens), key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(escaped) + r")\b", re.IGNORECASE)
+
+_INVESTOR_RE: re.Pattern = _build_investor_pattern(_DEFAULT_INVESTOR_TOKENS)
+
+
+def strip_investor_tokens(
+    texts: "pd.Series",
+    extra_tokens: list[str] | None = None,
+) -> tuple["pd.Series", "pd.Series"]:
+    """
+    Remove investor-identity tokens from texts before vectorisation.
+
+    Returns
+    -------
+    texts_stripped : Series with investor tokens removed (used for clustering).
+    is_templated   : Boolean Series – True when ≥1 investor token was found.
+    """
+    pattern = (
+        _build_investor_pattern(_DEFAULT_INVESTOR_TOKENS + extra_tokens)
+        if extra_tokens
+        else _INVESTOR_RE
+    )
+
+    is_templated = texts.str.contains(pattern, regex=True).fillna(False)
+    texts_stripped = texts.str.replace(pattern, " ", regex=True).str.strip()
+
+    n = int(is_templated.sum())
+    print(f"  Investor tokens stripped from {n:,} / {len(texts):,} documents "
+          f"({100 * n / len(texts):.1f}%)")
+    return texts_stripped, is_templated
+
+
 def evaluate_clusters(X: np.ndarray, labels: np.ndarray) -> dict:
     """Compute standard clustering metrics (ignores noise label -1)."""
     mask = labels >= 0
@@ -246,15 +298,21 @@ def run(args):
     df = read_data(args.input)
     print(f"Loaded {len(df):,} rows × {df.shape[1]} columns")
 
-    df_sub = df
+    df_sub = df[df["indep"] == 1].copy()
 
     # ── Preprocess ────────────────────────────────────────────────────────────
     print(f"\n{'=' * 70}")
     print("STEP 3 – PREPROCESS TEXT")
     print(f"{'=' * 70}")
-    texts_raw = df_sub[args.rat_col]
+    texts_raw   = df_sub[args.rat_col]
     texts_clean = preprocess_series(texts_raw, lemmatize=True)
-    df_sub["_text_clean"] = texts_clean
+
+    # ── NEW: strip investor identity tokens ──────────────────────────────────
+    extra = getattr(args, "investor_stopwords", None)  # list[str] | None
+    texts_clean, is_templated = strip_investor_tokens(texts_clean, extra_tokens=extra)
+    df_sub["is_templated"] = is_templated.values
+    df_sub["_text_clean"]  = texts_clean
+    # ─────────────────────────────────────────────────────────────────────────
 
     # ── Vectorise ─────────────────────────────────────────────────────────────
     print(f"\n{'=' * 70}")
@@ -371,12 +429,23 @@ def run(args):
     print("STEP 10 – SAVE OUTPUTS")
     print(f"{'=' * 70}")
 
-    # Drop internal clean-text column from df_sub (not needed in output)
-    if "_text_clean" in df.columns:
-        df = df.drop(columns=["_text_clean"])
+    from extract_clusters import save_clusters
 
-    write_data(df, args.output)
-    print(f"  Enriched dataset  : {args.output}")
+    # Attach cluster column to the full output
+    df_sub = df_sub.reset_index(drop=True)
+    df_sub["cluster"] = labels
+
+    # 1) Full enriched file (original behaviour)
+    if "_text_clean" in df_sub.columns:
+        df_sub = df_sub.drop(columns=["_text_clean"])
+    write_data(df_sub, args.output)
+
+    # # Drop internal clean-text column from df_sub (not needed in output)
+    # if "_text_clean" in df.columns:
+    #     df = df.drop(columns=["_text_clean"])
+
+    # write_data(df, args.output)
+    # print(f"  Enriched dataset  : {args.output}")
 
     # Summary CSV
     if not summary_df.empty:
@@ -499,6 +568,18 @@ def parse_args():
     # Output options
     parser.add_argument(
         "--top_terms", type=int, default=12, help="Top TF-IDF terms shown per cluster"
+    )
+
+    parser.add_argument(
+        "--investor_stopwords",
+        nargs="+",
+        default=None,
+        metavar="TOKEN",
+        help=(
+            "Additional investor-identity tokens to strip before vectorisation. "
+            "Built-in tokens (LGIM, AllianzGI, etc.) are always removed. "
+            "Example: --investor_stopwords 'blackrock' 'our policy'"
+        ),
     )
 
     return parser.parse_args()
